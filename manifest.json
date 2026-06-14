@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "openchargemap-mcp-server",
+  "display_name": "openchargemap-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for the global Open Charge Map EV charging registry: find stations by location and connector, get full station detail, resolve reference IDs, and read community reliability check-ins.",
+  "author": { "name": "Casey Hand @cyanheads", "email": "casey@caseyjhand.com" },
+  "homepage": "https://github.com/cyanheads/openchargemap-mcp-server",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyanheads/openchargemap-mcp-server"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "MCP_AUTH_MODE": "none",
+        "NODE_ENV": "production",
+        "OPENCHARGEMAP_API_KEY": "${user_config.OPENCHARGEMAP_API_KEY}",
+        "OPENCHARGEMAP_REFERENCE_REFRESH": "${user_config.OPENCHARGEMAP_REFERENCE_REFRESH}"
+      }
+    }
+  },
+  "compatibility": {
+    "runtimes": { "node": ">=24.0.0" }
+  },
+  "tools_generated": true,
+  "prompts_generated": false,
+  "user_config": {
+    "OPENCHARGEMAP_API_KEY": {
+      "type": "string",
+      "title": "Open Charge Map API Key",
+      "description": "Sent as the X-API-Key header on every request. Free instant signup at openchargemap.org.",
+      "sensitive": true,
+      "required": true
+    },
+    "OPENCHARGEMAP_REFERENCE_REFRESH": {
+      "type": "string",
+      "title": "Refresh Reference Data On Startup",
+      "description": "When true, refresh reference data from the live OCM endpoint at startup (falls back to the bundled snapshot on failure). Leave false to stay fully offline.",
+      "required": false,
+      "default": "false"
+    }
+  }
+}
