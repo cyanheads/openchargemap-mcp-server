@@ -1,8 +1,8 @@
 {
   "name": "@cyanheads/openchargemap-mcp-server",
   "mcpName": "io.github.cyanheads/openchargemap-mcp-server",
-  "version": "0.1.0",
-  "description": "MCP server for the global Open Charge Map EV charging registry: find stations by location and connector, get full station detail, resolve reference IDs, and read community reliability check-ins.",
+  "version": "0.1.1",
+  "description": "Find EV charging stations worldwide by location and connector via the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
