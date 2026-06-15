@@ -6,14 +6,20 @@
     "url": "https://github.com/cyanheads/openchargemap-mcp-server",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://openchargemap.caseyjhand.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/openchargemap-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "packageArguments": [
         {
           "type": "positional",
@@ -62,7 +68,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/openchargemap-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "packageArguments": [
         {
           "type": "positional",
