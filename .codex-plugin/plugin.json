@@ -1,6 +1,6 @@
 {
   "name": "openchargemap-mcp-server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Find EV charging stations worldwide by location and connector via the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "Casey Hand @cyanheads",

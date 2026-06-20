@@ -1,6 +1,6 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-06-14 02:00:26
+Generated on: 2026-06-20 17:29:17
 
 ```text
 openchargemap-mcp-server/
@@ -26,6 +26,7 @@ openchargemap-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
