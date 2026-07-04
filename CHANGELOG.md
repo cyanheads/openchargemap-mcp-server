@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-07-04 · 🛡️ Security
+
+Local minchargepoints enforcement and zero-coordinate filtering in find_stations; tightened tool/resource descriptions; dependency bump clears a moderate js-yaml DoS advisory
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-20
 
 mcp-ts-core ^0.10.6 → ^0.10.9 maintenance — fresh-scaffold devcheck guards, new check-dependency-specifiers step, plugin-manifest packaging checks, synced framework skills
