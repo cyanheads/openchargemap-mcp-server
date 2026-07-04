@@ -45,6 +45,43 @@ function joinFilter(value: number | number[] | undefined): string | undefined {
 }
 
 /**
+ * True when a raw POI carries usable coordinates. OCM stores some records at exactly 0,0 (a
+ * placeholder that would otherwise surface as a false distance-0 match) and omits lat/lng on others
+ * (which `normalizeStation` then defaults to 0,0). Both are unusable for a proximity search, so it
+ * drops them — checked on the raw address, ahead of the `?? 0` default that erases the distinction.
+ * A single-axis zero (equator or prime meridian) is a real location and survives.
+ */
+function hasUsableCoordinates(poi: RawPoi): boolean {
+  const lat = poi.AddressInfo?.Latitude;
+  const lng = poi.AddressInfo?.Longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  return !(lat === 0 && lng === 0);
+}
+
+/**
+ * Resolve a station's charge-point count: `numberOfPoints` when present, else the summed connection
+ * quantities (OCM omits `numberOfPoints` on ~96% of records). Undefined when neither signal exists —
+ * an unknown count, not zero.
+ */
+function chargePointCount(station: NormalizedStation): number | undefined {
+  if (typeof station.numberOfPoints === 'number') return station.numberOfPoints;
+  const known = station.connections
+    .map((c) => c.quantity)
+    .filter((q): q is number => typeof q === 'number');
+  return known.length > 0 ? known.reduce((sum, q) => sum + q, 0) : undefined;
+}
+
+/**
+ * Local charge-point filter honoring the `minchargepoints` contract (OCM's `minnumberofpoints` query
+ * param is inert). A station with no count signal at all is unknown, not below-minimum, so it is kept.
+ */
+function meetsMinChargePoints(station: NormalizedStation, min: number | undefined): boolean {
+  if (min === undefined) return true;
+  const count = chargePointCount(station);
+  return count === undefined || count >= min;
+}
+
+/**
  * Hash a composed cache key to a storage-safe token. The framework's key validator allows only
  * `[a-zA-Z0-9_.\-/]` — no colons — so segments join with hyphens (the hash is hex, also safe).
  */
@@ -70,7 +107,13 @@ export class OpenChargeMapService {
 
     const url = this.buildSearchUrl(params);
     const raw = await this.fetchPois(url, 'searchPois', ctx);
-    const stations = raw.map((poi) => this.normalizeStation(poi));
+    // Search-only response filters (getPoi keeps everything): drop unusable-coordinate POIs on the
+    // RAW address before normalization's `?? 0` erases the 0,0-vs-missing distinction, then honor the
+    // minchargepoints contract locally since OCM's minnumberofpoints param is inert.
+    const stations = raw
+      .filter(hasUsableCoordinates)
+      .map((poi) => this.normalizeStation(poi))
+      .filter((station) => meetsMinChargePoints(station, params.minchargepoints));
     await ctx.state.set(key, stations, { ttl: CACHE_TTL_SECONDS });
     return stations;
   }

@@ -14,7 +14,7 @@ export const stationResource = resource('openchargemap://station/{id}', {
   name: 'openchargemap-station',
   title: 'openchargemap-mcp-server: station record',
   description:
-    'Full Open Charge Map station record by numeric OCM ID, including community comments — the resource twin of openchargemap_get_station.',
+    'Full Open Charge Map station record by numeric OCM ID, including community comments.',
   mimeType: 'application/json',
   params: z.object({
     id: z.string().regex(/^\d+$/).describe('Numeric OCM station ID.'),
@@ -43,6 +43,7 @@ export const stationResource = resource('openchargemap://station/{id}', {
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: station.comments,
+      coordinates: { latitude: station.address.latitude, longitude: station.address.longitude },
     });
     return {
       station,

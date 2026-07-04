@@ -27,7 +27,9 @@ const { initReferenceDataService } = await import(
 const { initOpenChargeMapService } = await import(
   '@/services/openchargemap/openchargemap-service.js'
 );
-const { FULL_POI_DETAIL, SPARSE_POI, jsonResponse } = await import('../fixtures/ocm.js');
+const { FULL_POI_DETAIL, SPARSE_POI, ZERO_COORD_POI, jsonResponse } = await import(
+  '../fixtures/ocm.js'
+);
 
 const serverConfig = {
   apiKey: 'test-key',
@@ -97,6 +99,16 @@ describe('openchargemap_get_station', () => {
     expect(result.station.isOperational).toBeUndefined();
     expect(result.station.generalComments).toBeUndefined();
     expect(result).toEqual(expect.schemaMatching(getStation.output));
+  });
+
+  it('keeps a 0,0 record on direct lookup and flags the coordinate in the reliability note', async () => {
+    // Direct ID lookup must NOT filter 0,0 (unlike search) — the record is a fact about that station.
+    fetchWithTimeout.mockResolvedValue(jsonResponse([ZERO_COORD_POI]));
+    const result = await getStation.handler(getStation.input.parse({ id: 494804 }), ctx());
+    expect(result.station.id).toBe(494804); // not filtered out
+    expect(result.station.address.latitude).toBe(0);
+    expect(result.station.address.longitude).toBe(0);
+    expect(result.reliabilityNote).toContain('0,0'); // coordinate caveat surfaced
   });
 
   it('maps a 403 to auth_failed (fetch mock throws)', async () => {

@@ -114,6 +114,42 @@ export const SPARSE_POI: RawPoi = {
   // StatusType key entirely absent; UsageType absent; OperatorInfo absent; MediaItems absent.
 };
 
+/**
+ * A real-looking US station that OCM stores at the 0,0 sentinel (open ocean, Gulf of Guinea) — a
+ * systemic data-quality pattern, not a real location. A proximity search must drop it; a direct
+ * ID lookup keeps it but flags the coordinate.
+ */
+export const ZERO_COORD_POI: RawPoi = {
+  ID: 494804,
+  UUID: 'ZZZZ0000-0000-0000-0000-000000000000',
+  OperatorID: 5,
+  StatusTypeID: 50,
+  DateLastVerified: '2025-06-01T00:00:00Z',
+  IsRecentlyVerified: true,
+  StatusType: { ID: 50, Title: 'Operational', IsOperational: true },
+  AddressInfo: {
+    ID: 3,
+    Title: 'Tanluzhe Showroom/Test Location',
+    AddressLine1: '123 Industrial Way',
+    Town: 'San Jose',
+    StateOrProvince: 'California',
+    Postcode: '95112',
+    Country: { ISOCode: 'US', Title: 'United States', ContinentCode: 'NA' },
+    Latitude: 0,
+    Longitude: 0,
+    Distance: 0,
+    DistanceUnit: 1,
+  },
+  Connections: [
+    {
+      ID: 1,
+      ConnectionTypeID: 27,
+      ConnectionType: { ID: 27, Title: 'NACS / Tesla Supercharger' },
+      Quantity: 4,
+    },
+  ],
+};
+
 /** Build a minimal fake `Response` whose `.json()` resolves to `body`. */
 export function jsonResponse(body: unknown): Response {
   return {

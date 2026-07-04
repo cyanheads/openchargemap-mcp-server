@@ -1,7 +1,7 @@
 /**
  * @fileoverview Shared Open Charge Map attribution string and the reliability-note helper —
- * plain-prose caveats derived from observable facts (verification age, operational flag,
- * fault-vs-positive comment counts). No synthetic score (per the no-fabricated-signal rule).
+ * plain-prose caveats derived from observable facts (verification age, operational flag, placeholder
+ * 0,0 coordinates, fault-vs-positive comment counts). No synthetic score (per the no-fabricated-signal rule).
  * @module services/openchargemap/attribution
  */
 
@@ -38,8 +38,16 @@ export function buildReliabilityNote(input: {
   isOperational: boolean | undefined;
   dateLastVerified: string | null | undefined;
   comments: NormalizedComment[] | undefined;
+  coordinates?: { latitude: number; longitude: number };
 }): string | undefined {
   const parts: string[] = [];
+
+  const badCoordinates = input.coordinates?.latitude === 0 && input.coordinates?.longitude === 0;
+  if (badCoordinates) {
+    parts.push(
+      'Coordinates are recorded as 0,0 — a placeholder, not a real location; do not use them for distance or navigation.',
+    );
+  }
 
   const months = monthsSince(input.dateLastVerified);
   const stale = months !== null && months >= STALE_MONTHS;
@@ -67,8 +75,15 @@ export function buildReliabilityNote(input: {
 
   // Only emit a note when at least one concrete caveat fired and the picture isn't all-clear.
   if (parts.length === 0) return;
-  // Suppress a lone "unknown" caveat when the listing is fresh and uncontested.
-  if (parts.length === 1 && input.isOperational === undefined && !stale && months !== null) {
+  // Suppress a lone "operational unknown" caveat when the listing is fresh and uncontested — but a
+  // bad-coordinate flag is a hard data-quality problem that must always surface.
+  if (
+    parts.length === 1 &&
+    !badCoordinates &&
+    input.isOperational === undefined &&
+    !stale &&
+    months !== null
+  ) {
     return;
   }
   return parts.join(' ');

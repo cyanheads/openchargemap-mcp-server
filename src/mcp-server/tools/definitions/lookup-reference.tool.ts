@@ -14,7 +14,7 @@ import type { ReferenceCategory } from '@/services/reference-data/types.js';
 export const lookupReference = tool('openchargemap_lookup_reference', {
   title: 'openchargemap-mcp-server: lookup reference',
   description:
-    'Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" -> a connectiontypeid, "ChargePoint" -> an operatorid, "Public - Pay At Location" -> a usagetypeid, "France" or "FR" -> a country. Omit the query to browse the whole category. Served from a bundled snapshot — offline and instant. Use the returned id(s) in openchargemap_find_stations.',
+    'Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" -> a connectiontypeid, "ChargePoint" -> an operatorid, "Public - Pay At Location" -> a usagetypeid, "France" or "FR" -> a country. Omit the query to browse the whole category.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   input: z.object({
@@ -55,11 +55,7 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
       .array(
         z
           .object({
-            id: z
-              .number()
-              .describe(
-                'The reference ID — pass to the matching openchargemap_find_stations filter (e.g. connectiontypeid).',
-              ),
+            id: z.number().describe('The reference ID for this entry.'),
             title: z
               .string()
               .describe(
@@ -83,9 +79,7 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
           })
           .describe('A matching reference entry.'),
       )
-      .describe(
-        'Matching reference entries, best/exact match first. Use the id in a find_stations filter.',
-      ),
+      .describe('Matching reference entries, best/exact match first.'),
     filterParam: z
       .string()
       .optional()

@@ -16,26 +16,18 @@ import { renderComment } from './get-station.tool.js';
 export const getStationComments = tool('openchargemap_get_station_comments', {
   title: 'openchargemap-mcp-server: get station comments',
   description:
-    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings and dates, alongside the station\'s current registry status and last-verified date so you can flag mismatches like "listed operational, but the last few check-ins report a fault." Obtain a station ID from openchargemap_find_stations.',
+    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings and dates, alongside the station\'s current registry status and last-verified date, surfacing mismatches like "listed operational, but the last few check-ins report a fault."',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
-    id: z
-      .number()
-      .int()
-      .positive()
-      .describe(
-        'Numeric OCM station ID. Get one from openchargemap_find_stations. Note: UUID lookup is not supported by the OCM API.',
-      ),
+    id: z.number().int().positive().describe('Numeric OCM station ID.'),
     maxresults: z
       .number()
       .int()
       .min(1)
       .max(100)
       .default(25)
-      .describe(
-        'Maximum comments to return (handler trims, newest first). The OCM API returns all embedded comments — this caps what the tool surfaces. Max 100.',
-      ),
+      .describe('Maximum comments to return, newest first. Max 100.'),
   }),
 
   output: z.object({
@@ -49,7 +41,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       .boolean()
       .optional()
       .describe(
-        'Whether the registry marks the station operational. Absent (not null) when status is Unknown — OCM omits the flag then. Compare against the comments below — they are the real-world check.',
+        'Whether the registry marks the station operational. Absent when the operational state is unknown. Compare against the comments below — they are the real-world check.',
       ),
     dateLastVerified: z
       .string()
@@ -65,7 +57,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       .string()
       .optional()
       .describe(
-        'Server-computed caveat when status and comments disagree or the listing is stale (plain prose from observable facts; no synthetic score). Omitted when nothing to flag.',
+        'A caveat when the registry status, verification age, coordinates, or comments suggest the listing may not reflect reality. Omitted when there is nothing to flag.',
       ),
     attribution: z
       .string()
@@ -142,6 +134,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: allComments,
+      coordinates: { latitude: station.address.latitude, longitude: station.address.longitude },
     });
 
     return {

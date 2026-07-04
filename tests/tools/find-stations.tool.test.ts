@@ -8,6 +8,7 @@
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RawPoi } from '@/services/openchargemap/types.js';
 
 const fetchWithTimeout = vi.fn();
 
@@ -28,7 +29,7 @@ const { initReferenceDataService } = await import(
 const { initOpenChargeMapService } = await import(
   '@/services/openchargemap/openchargemap-service.js'
 );
-const { FULL_POI, SPARSE_POI, jsonResponse } = await import('../fixtures/ocm.js');
+const { FULL_POI, SPARSE_POI, ZERO_COORD_POI, jsonResponse } = await import('../fixtures/ocm.js');
 
 const serverConfig = {
   apiKey: 'test-key',
@@ -147,6 +148,111 @@ describe('openchargemap_find_stations', () => {
     expect(s.numberOfPoints).toBeUndefined();
     expect(s.connections[0]!.powerKW).toBeNull();
     expect(result).toEqual(expect.schemaMatching(findStations.output));
+  });
+
+  // --- #1: minchargepoints applied locally (OCM's minnumberofpoints param is inert) ---
+
+  it('post-filters minchargepoints locally, dropping stations below the count', async () => {
+    const bigStation: RawPoi = { ...FULL_POI, ID: 999001, NumberOfPoints: 1000 };
+    fetchWithTimeout.mockResolvedValue(jsonResponse([bigStation, FULL_POI, SPARSE_POI]));
+    const input = findStations.input.parse({ latitude: 47, longitude: -122, minchargepoints: 10 });
+    const result = await findStations.handler(input, ctx());
+    const ids = result.stations.map((s) => s.id);
+    expect(ids).toContain(999001); // numberOfPoints 1000 ≥ 10 → kept
+    expect(ids).not.toContain(145452); // FULL_POI count 2 (summed connection quantity) < 10 → dropped
+    expect(ids).toContain(253415); // SPARSE_POI has no count signal → unknown, not excluded
+  });
+
+  it('minchargepoints excludes a station via the connection-quantity fallback (numberOfPoints absent)', async () => {
+    // FULL_POI: no NumberOfPoints, one connection Quantity 2 → count resolves to 2.
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const input = findStations.input.parse({ latitude: 47, longitude: -122, minchargepoints: 3 });
+    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'no_stations' },
+    });
+  });
+
+  it('minchargepoints keeps a station whose summed connection quantity meets the threshold', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const input = findStations.input.parse({ latitude: 47, longitude: -122, minchargepoints: 2 });
+    const result = await findStations.handler(input, ctx());
+    expect(result.stations.map((s) => s.id)).toContain(145452); // count 2 ≥ 2 → kept
+  });
+
+  it('minchargepoints never excludes a station with no count signal at all', async () => {
+    // SPARSE_POI: no NumberOfPoints, connection Quantity null → count unknown → kept.
+    fetchWithTimeout.mockResolvedValue(jsonResponse([SPARSE_POI]));
+    const input = findStations.input.parse({
+      latitude: 51.5,
+      longitude: -0.12,
+      minchargepoints: 5,
+    });
+    const result = await findStations.handler(input, ctx());
+    expect(result.stations.map((s) => s.id)).toContain(253415);
+  });
+
+  // --- #2: zero-coordinate (0,0) and missing-coordinate records dropped from search ---
+
+  it('drops zero-coordinate (0,0) records from radius search results', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI, ZERO_COORD_POI]));
+    const input = findStations.input.parse({ latitude: 47, longitude: -122 });
+    const result = await findStations.handler(input, ctx());
+    const ids = result.stations.map((s) => s.id);
+    expect(ids).toContain(145452); // real station kept
+    expect(ids).not.toContain(494804); // 0,0 sentinel dropped
+  });
+
+  it('throws no_stations when every result is a 0,0 sentinel', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([ZERO_COORD_POI, { ...ZERO_COORD_POI, ID: 304716 }]),
+    );
+    const input = findStations.input.parse({
+      latitude: 0,
+      longitude: 0,
+      distance: 1,
+      countrycode: 'US',
+    });
+    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'no_stations' },
+    });
+  });
+
+  it('drops records with missing coordinates (absent lat/lng) from search results', async () => {
+    const noCoords: RawPoi = {
+      ID: 777001,
+      UUID: 'no-coords-0000-0000-0000-000000000000',
+      AddressInfo: { ID: 9, Title: 'Ghost station', Country: { ISOCode: 'US' } },
+      Connections: [],
+    };
+    fetchWithTimeout.mockResolvedValue(jsonResponse([noCoords]));
+    const input = findStations.input.parse({ latitude: 47, longitude: -122 });
+    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
+      data: { reason: 'no_stations' },
+    });
+  });
+
+  it('keeps a station on the equator (single-axis zero is a real location)', async () => {
+    const equatorStation: RawPoi = {
+      ID: 888001,
+      UUID: 'EQ000000-0000-0000-0000-000000000000',
+      StatusType: { ID: 50, Title: 'Operational', IsOperational: true },
+      AddressInfo: {
+        ID: 8,
+        Title: 'Kampala equator station',
+        Country: { ISOCode: 'UG' },
+        Latitude: 0,
+        Longitude: 32.58,
+        Distance: 5,
+        DistanceUnit: 1,
+      },
+      Connections: [{ ID: 1, ConnectionTypeID: 25, Quantity: 2 }],
+    };
+    fetchWithTimeout.mockResolvedValue(jsonResponse([equatorStation]));
+    const input = findStations.input.parse({ latitude: 0.1, longitude: 32.5 });
+    const result = await findStations.handler(input, ctx());
+    expect(result.stations.map((s) => s.id)).toContain(888001);
   });
 
   it('maps a 403 to auth_failed (fetch mock throws, as the real framework does on non-OK)', async () => {

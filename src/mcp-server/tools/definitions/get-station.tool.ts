@@ -54,17 +54,11 @@ const DetailStationSchema = StationSchema.extend({
 export const getStation = tool('openchargemap_get_station', {
   title: 'openchargemap-mcp-server: get station',
   description:
-    'Get the full record for one Open Charge Map station by its numeric OCM ID. Returns every connection (type, level, power, current, quantity, per-connection status), the operator and network, usage and access restrictions (pay-at-location, membership, access key), the number of charge points, general comments, usage cost, the data provider, media, and verification recency. Set includeComments to also return community check-ins inline. Obtain an ID from openchargemap_find_stations.',
+    'Get the full record for one Open Charge Map station by its numeric OCM ID. Returns every connection (type, level, power, current, quantity, per-connection status), the operator and network, usage and access restrictions (pay-at-location, membership, access key), the number of charge points, general comments, usage cost, the data provider, media, and verification recency. Set includeComments to also return community check-ins inline.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
-    id: z
-      .number()
-      .int()
-      .positive()
-      .describe(
-        'Numeric OCM station ID (e.g. 145452). Obtain one from openchargemap_find_stations. Note: UUID lookup is not supported by the OCM API.',
-      ),
+    id: z.number().int().positive().describe('Numeric OCM station ID (e.g. 145452).'),
     includeComments: z
       .boolean()
       .default(false)
@@ -79,7 +73,7 @@ export const getStation = tool('openchargemap_get_station', {
       .string()
       .optional()
       .describe(
-        'Server-computed caveat when registry status and recency suggest the listing may not reflect reality (plain prose from observable facts; no synthetic score). Omitted when status is fresh and uncontested.',
+        'A caveat when the registry status, verification age, coordinates, or comments suggest the listing may not reflect reality. Omitted when there is nothing to flag.',
       ),
     attribution: z
       .string()
@@ -128,6 +122,7 @@ export const getStation = tool('openchargemap_get_station', {
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: station.comments,
+      coordinates: { latitude: station.address.latitude, longitude: station.address.longitude },
     });
 
     return {

@@ -75,11 +75,7 @@ export const CommentSchema = z
 /** The core station shape shared by search results and detail. */
 export const StationSchema = z
   .object({
-    id: z
-      .number()
-      .describe(
-        'OCM station ID. Pass to openchargemap_get_station or openchargemap_get_station_comments.',
-      ),
+    id: z.number().describe('OCM station ID.'),
     uuid: z
       .string()
       .describe(
@@ -91,12 +87,7 @@ export const StationSchema = z
       .number()
       .optional()
       .describe('Distance from the search point. Absent for bounding-box searches.'),
-    distanceUnit: z
-      .enum(['KM', 'Miles'])
-      .optional()
-      .describe(
-        'Unit of the distance value (normalized from the OCM integer enum: 1=KM, 2=Miles).',
-      ),
+    distanceUnit: z.enum(['KM', 'Miles']).optional().describe('Unit of the distance value.'),
     operator: z
       .string()
       .optional()
@@ -143,7 +134,7 @@ export const StationSchema = z
       .boolean()
       .optional()
       .describe(
-        'Whether the registry marks the status operational. Absent (not null) when StatusType is "Unknown" (ID=0) — OCM omits the flag then. A true value can still mask a broken charger — corroborate with comments and dateLastVerified.',
+        'Whether the registry marks the status operational. Absent when the operational state is unknown. A true value can still mask a broken charger — corroborate with comments and dateLastVerified.',
       ),
     dateLastVerified: z
       .string()
@@ -155,7 +146,7 @@ export const StationSchema = z
     isRecentlyVerified: z
       .boolean()
       .optional()
-      .describe('OCM flag: whether the listing was verified recently.'),
+      .describe('Whether the listing was verified recently.'),
     connections: z
       .array(ConnectionSchema)
       .describe('Connectors at the station. Empty when OCM has no connection data on record.'),

@@ -120,15 +120,13 @@ const FindStationsInput = z.object({
     .min(1)
     .max(200)
     .default(25)
-    .describe(
-      'Maximum stations to return, ordered by distance from the search point. Max 200. Larger values cost more payload and upstream load — prefer tightening filters over raising this.',
-    ),
+    .describe('Maximum stations to return, ordered by distance from the search point. Max 200.'),
 });
 
 export const findStations = tool('openchargemap_find_stations', {
   title: 'openchargemap-mcp-server: find stations',
   description:
-    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date — treat an old dateLastVerified or a non-operational status as a reliability caveat.',
+    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: FindStationsInput,
