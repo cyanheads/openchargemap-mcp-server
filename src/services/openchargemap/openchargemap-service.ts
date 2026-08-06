@@ -27,10 +27,39 @@ import type {
   RawPoi,
   RawUserComment,
   SearchPoiParams,
+  SearchPoiResult,
 } from './types.js';
 
 /** Result-cache TTL in seconds — station status drifts over minutes, not seconds. */
 const CACHE_TTL_SECONDS = 600;
+
+/**
+ * The deepest window `searchPois` can serve, and the largest page it will ask OCM for. Bounded
+ * because OCM has no offset parameter — the whole reachable set has to come back in one response —
+ * and because response time past this size grows unreliable against the 15s fetch timeout.
+ */
+export const MAX_SEARCH_WINDOW = 500;
+
+/**
+ * Candidate-page sizes `searchPois` may request from OCM, smallest first. The upstream page is
+ * sized from this ladder rather than from the caller's window, for two reasons: the local filters
+ * (`hasUsableCoordinates`, `meetsMinChargePoints`) then select from a wider pool than the caller
+ * asked for, and every window quantizing to the same rung reads one cache entry instead of
+ * re-fetching. Quantized rather than computed so nearby windows share that entry — OCM serves a
+ * larger `maxresults` as the same ordered prefix, so a step up the ladder is a superset of the
+ * rung below it. A window that outgrows its rung does fetch again, one rung wider: paging a default
+ * 25-station page costs a fetch at offset 0, 25, and 50, then rides the cached top rung.
+ */
+const CANDIDATE_PAGE_SIZES = [100, 250, MAX_SEARCH_WINDOW] as const;
+
+/** Candidate records fetched per match the caller needs, leaving the local filters room to drop rows. */
+const CANDIDATE_OVERFETCH = 4;
+
+/** Smallest candidate page that covers the caller's window with room for local filtering. */
+function candidatePageSize(window: number): number {
+  const wanted = window * CANDIDATE_OVERFETCH;
+  return CANDIDATE_PAGE_SIZES.find((size) => size >= wanted) ?? MAX_SEARCH_WINDOW;
+}
 
 /** Map the OCM integer distance-unit enum to a string. */
 function distanceUnitLabel(raw: number | null | undefined): 'KM' | 'Miles' | undefined {
@@ -105,28 +134,36 @@ export class OpenChargeMapService {
   constructor(private readonly serverConfig: ServerConfig) {}
 
   /**
-   * Search POIs by radius or bounding box with optional filters (`verbose=false`).
-   * Returns normalized stations ordered by distance. Cached per param set in `ctx.state`.
+   * Search POIs by radius or bounding box with optional filters (`verbose=false`), returning the
+   * whole candidate page the local filters left, ordered by distance — the caller slices its own
+   * window out of it. Cached per filter set and candidate-page size (not per window) in
+   * `ctx.state`, so every window that quantizes to the same rung of {@link CANDIDATE_PAGE_SIZES}
+   * shares one upstream fetch, and a window that outgrows its rung fetches the next one up.
    */
-  async searchPois(params: SearchPoiParams, ctx: Context): Promise<NormalizedStation[]> {
-    const key = cacheKey('search', params);
-    const cached = await ctx.state.get<NormalizedStation[]>(key);
+  async searchPois(params: SearchPoiParams, ctx: Context): Promise<SearchPoiResult> {
+    const candidateCap = candidatePageSize(params.window);
+    // The window is deliberately absent from the key — every window over the same search and
+    // candidate page reads one cache entry. `JSON.stringify` drops the undefined.
+    const key = cacheKey('search', { ...params, window: undefined, candidateCap });
+    const cached = await ctx.state.get<SearchPoiResult>(key);
     if (cached) {
       ctx.log.debug('OCM search cache hit', { key });
       return cached;
     }
 
-    const url = this.buildSearchUrl(params);
+    const url = this.buildSearchUrl(params, candidateCap);
     const raw = await this.fetchPois(url, 'searchPois', ctx);
     // Search-only response filters (getPoi keeps everything): drop unusable-coordinate POIs on the
     // RAW address before normalization's `?? 0` erases the 0,0-vs-missing distinction, then honor the
-    // minchargepoints contract locally since OCM's minnumberofpoints param is inert.
-    const stations = raw
+    // minchargepoints contract locally since OCM's minnumberofpoints param is inert. Both run over
+    // the full candidate page, so a match ranked past the caller's window is not lost to the cap.
+    const matches = raw
       .filter(hasUsableCoordinates)
       .map((poi) => this.normalizeStation(poi))
       .filter((station) => meetsMinChargePoints(station, params.minchargepoints));
-    await ctx.state.set(key, stations, { ttl: CACHE_TTL_SECONDS });
-    return stations;
+    const result: SearchPoiResult = { candidateCap, fetched: raw.length, matches };
+    await ctx.state.set(key, result, { ttl: CACHE_TTL_SECONDS });
+    return result;
   }
 
   /**
@@ -161,12 +198,12 @@ export class OpenChargeMapService {
 
   // --- URL construction ---
 
-  private buildSearchUrl(params: SearchPoiParams): string {
+  private buildSearchUrl(params: SearchPoiParams, candidateCap: number): string {
     const qs = new URLSearchParams({
       output: 'json',
       compact: 'false',
       verbose: 'false',
-      maxresults: String(params.maxresults),
+      maxresults: String(candidateCap),
     });
 
     if (params.boundingbox) {
@@ -181,8 +218,9 @@ export class OpenChargeMapService {
 
     if (params.countrycode) qs.set('countrycode', params.countrycode.toUpperCase());
     if (params.minpowerkw !== undefined) qs.set('minpowerkw', String(params.minpowerkw));
-    if (params.minchargepoints !== undefined)
-      qs.set('minnumberofpoints', String(params.minchargepoints));
+    // No minimum-charge-point param is sent: OCM's `minnumberofpoints` is inert (confirmed live —
+    // present or absent, the same records come back in the same order). `meetsMinChargePoints`
+    // carries that contract instead.
 
     const conn = joinFilter(params.connectiontypeid);
     if (conn) qs.set('connectiontypeid', conn);

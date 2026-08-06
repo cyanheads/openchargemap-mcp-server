@@ -132,13 +132,13 @@ describe('OCM response parser fuzzing', () => {
     for (let seed = 1; seed <= 100; seed += 1) {
       fetchWithTimeout.mockResolvedValueOnce(jsonResponse([sparsePoi(seed)]));
       const service = new OpenChargeMapService(serverConfig);
-      const result = await service.searchPois(
-        { maxresults: 1, latitude: 0, longitude: 0 },
+      const { matches } = await service.searchPois(
+        { window: 1, latitude: 0, longitude: 0 },
         ctx(seed),
       );
 
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({
         id: expect.any(Number),
         uuid: expect.any(String),
         title: expect.any(String),
@@ -173,8 +173,8 @@ describe('OCM response parser fuzzing', () => {
     const service = new OpenChargeMapService(serverConfig);
     fetchWithTimeout.mockResolvedValueOnce(jsonResponse([]));
     await expect(
-      service.searchPois({ maxresults: 1, latitude: 0, longitude: 0 }, ctx(101)),
-    ).resolves.toEqual([]);
+      service.searchPois({ window: 1, latitude: 0, longitude: 0 }, ctx(101)),
+    ).resolves.toMatchObject({ fetched: 0, matches: [] });
 
     fetchWithTimeout.mockResolvedValueOnce(jsonResponse([]));
     await expect(service.getPoi(999_999, { includeComments: true }, ctx(102))).resolves.toBeNull();
@@ -187,7 +187,7 @@ describe('OCM response parser fuzzing', () => {
       const service = new OpenChargeMapService(serverConfig);
 
       await expect(
-        service.searchPois({ maxresults: 1, latitude: 0, longitude: 0 }, ctx(103)),
+        service.searchPois({ window: 1, latitude: 0, longitude: 0 }, ctx(103)),
       ).rejects.toMatchObject({
         code: JsonRpcErrorCode.ServiceUnavailable,
         data: { reason: 'upstream_unavailable' },
@@ -201,7 +201,7 @@ describe('OCM response parser fuzzing', () => {
     const service = new OpenChargeMapService(serverConfig);
 
     await expect(
-      service.searchPois({ maxresults: 3, latitude: 0, longitude: 0 }, ctx(104)),
+      service.searchPois({ window: 3, latitude: 0, longitude: 0 }, ctx(104)),
     ).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'upstream_unavailable' },
@@ -216,7 +216,7 @@ describe('OCM response parser fuzzing', () => {
     const service = new OpenChargeMapService(serverConfig);
 
     await expect(
-      service.searchPois({ maxresults: 1, latitude: 0, longitude: 0 }, ctx(105)),
+      service.searchPois({ window: 1, latitude: 0, longitude: 0 }, ctx(105)),
     ).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'upstream_unavailable' },
@@ -230,7 +230,7 @@ describe('OCM response parser fuzzing', () => {
     const service = new OpenChargeMapService(serverConfig);
 
     await expect(
-      service.searchPois({ maxresults: 2, latitude: 0, longitude: 0 }, ctx(106)),
+      service.searchPois({ window: 2, latitude: 0, longitude: 0 }, ctx(106)),
     ).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'upstream_unavailable', retryable: true },

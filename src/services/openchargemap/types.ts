@@ -252,10 +252,30 @@ export interface SearchPoiParams {
   latitude?: number | undefined;
   levelid?: number | number[];
   longitude?: number | undefined;
-  maxresults: number;
   minchargepoints?: number;
   minpowerkw?: number;
   operatorid?: number | number[];
   statustypeid?: number | number[];
   usagetypeid?: number | number[];
+  /**
+   * How many post-filter matches the caller needs in hand — the end of its result window
+   * (`offset + page size`), NOT the `maxresults` sent upstream. The service sizes its own upstream
+   * page from this, deliberately larger, so the local filters select from a wider pool than the
+   * caller asked for and successive windows are served from one fetch.
+   */
+  window: number;
+}
+
+/**
+ * What one `searchPois` call retrieved. The caller slices its own window out of `matches`; the
+ * fetch counts are what let it tell a genuinely empty search area apart from a candidate page the
+ * local filters emptied, and disclose that more may sit past what was retrieved.
+ */
+export interface SearchPoiResult {
+  /** Records Open Charge Map requested for this candidate page. */
+  candidateCap: number;
+  /** Records Open Charge Map returned, before local filtering. */
+  fetched: number;
+  /** Stations that survived local filtering, ordered by distance — the whole retrieved set. */
+  matches: NormalizedStation[];
 }

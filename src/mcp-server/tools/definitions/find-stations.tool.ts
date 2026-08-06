@@ -8,7 +8,10 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { ATTRIBUTION } from '@/services/openchargemap/attribution.js';
-import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
+import {
+  getOpenChargeMapService,
+  MAX_SEARCH_WINDOW,
+} from '@/services/openchargemap/openchargemap-service.js';
 import type { SearchPoiParams } from '@/services/openchargemap/types.js';
 import { renderStationBlock, StationSchema } from './_station-schema.js';
 
@@ -66,7 +69,7 @@ const FindStationsInput = z.object({
     })
     .optional()
     .describe(
-      'Bounding-box search as an alternative to a center+radius. Mutually exclusive with latitude/longitude/distance.',
+      'Bounding-box search as an alternative to a center+radius. Mutually exclusive with latitude/longitude/distance — sending a boundingbox alongside a latitude or a longitude is rejected, not resolved in favour of one of them.',
     ),
 
   countrycode: z
@@ -126,12 +129,21 @@ const FindStationsInput = z.object({
     .max(200)
     .default(25)
     .describe('Maximum stations to return, ordered by distance from the search point. Max 200.'),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_SEARCH_WINDOW - 1)
+    .default(0)
+    .describe(
+      `Matching stations to skip before the returned page, for reading past a truncated result. Repeat the same search with the nextOffset value the previous call reported. One search reaches at most ${MAX_SEARCH_WINDOW} stations, so ${MAX_SEARCH_WINDOW - 1} is the deepest offset that can return one — narrow the area or add filters to reach stations beyond that. Ordering is by distance and stable, but Open Charge Map is edited continuously, so a station added or removed between pages can shift what a later offset lands on.`,
+    ),
 });
 
 export const findStations = tool('openchargemap_find_stations', {
   title: 'openchargemap-mcp-server: find stations',
   description:
-    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date.',
+    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: FindStationsInput,
@@ -151,26 +163,55 @@ export const findStations = tool('openchargemap_find_stations', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Number of stations returned.'),
-    truncated: z.boolean().optional().describe('True when results were capped at maxresults.'),
-    shown: z.number().optional().describe('Number of stations returned when the cap was hit.'),
+    totalCount: z
+      .number()
+      .describe(
+        'Matching stations this search retrieved, before the offset/maxresults page was taken. Open Charge Map publishes no match total and one search can only retrieve so deep, so this is exact only when the search reached the end of what Open Charge Map holds for the area — otherwise it is a floor that rises as deeper pages are read. The notice says which of the two applies.',
+      ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when matching stations were left out of the returned page.'),
+    shown: z.number().optional().describe('Stations in the returned page.'),
     cap: z.number().optional().describe('The maxresults cap that was applied.'),
+    nextOffset: z
+      .number()
+      .optional()
+      .describe(
+        'The offset to pass on an otherwise identical call to read the next page. Absent when nothing further was retrieved.',
+      ),
+    notice: z
+      .string()
+      .optional()
+      .describe('How to reach the stations this page left out, or why it came back empty.'),
+  },
+
+  // `totalCount` counts what this search retrieved, which is the whole match set only when the
+  // search reached the end of it. The default `**N total**` rendering reads as a match total in
+  // either case, so the trailer names what the number actually counts and leaves whether more
+  // exist to the notice beside it.
+  enrichmentTrailer: {
+    totalCount: {
+      render(value) {
+        return `**${value} matching stations retrieved**`;
+      },
+    },
   },
 
   errors: [
     {
       reason: 'invalid_location',
       code: JsonRpcErrorCode.InvalidParams,
-      when: 'Neither a center (latitude+longitude) nor a boundingbox was provided, or both were.',
+      when: 'No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude.',
       recovery:
-        'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one. Geocode a place name with openstreetmap_geocode to obtain coordinates.',
+        'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_geocode to obtain coordinates.',
     },
     {
       reason: 'no_stations',
       code: JsonRpcErrorCode.NotFound,
-      when: 'The search and filters returned zero stations.',
+      when: 'Open Charge Map holds no station for the search area and filters — either it returned nothing at all, or every station it returned was ruled out and there were no further candidates.',
       recovery:
-        'Widen the distance/bounding box, relax filters (drop minpowerkw or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.',
+        'Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.',
     },
     {
       reason: 'upstream_unavailable',
@@ -194,14 +235,17 @@ export const findStations = tool('openchargemap_find_stations', {
     const hasLongitude = input.longitude !== undefined;
     const hasRadius = hasLatitude && hasLongitude;
     const hasBbox = input.boundingbox !== undefined;
-    if (hasRadius === hasBbox) {
+    // A boundingbox rules out EITHER coordinate, not just a complete center. Gating on the complete
+    // center let `{ latitude, boundingbox }` through as a bounding-box-only call, and the latitude
+    // was then dropped with nothing in the response saying so.
+    if (hasBbox ? hasLatitude || hasLongitude : !hasRadius) {
       throw ctx.fail('invalid_location', locationFailure({ hasLatitude, hasLongitude, hasBbox }), {
         ...ctx.recoveryFor('invalid_location'),
       });
     }
 
     const params: SearchPoiParams = {
-      maxresults: input.maxresults,
+      window: input.offset + input.maxresults,
       ...(input.boundingbox
         ? { boundingbox: input.boundingbox }
         : {
@@ -220,21 +264,50 @@ export const findStations = tool('openchargemap_find_stations', {
       ...(input.minchargepoints !== undefined ? { minchargepoints: input.minchargepoints } : {}),
     };
 
-    const stations = await getOpenChargeMapService().searchPois(params, ctx);
+    const { candidateCap, fetched, matches } = await getOpenChargeMapService().searchPois(
+      params,
+      ctx,
+    );
+    // A full candidate page means the registry holds more than was retrieved, so an empty page is
+    // a limit of this search rather than a fact about the area. Only a page that came back short
+    // settles the question — and only then can zero matches honestly be reported as none existing.
+    const moreUpstream = fetched >= candidateCap;
     ctx.log.info('OCM search complete', {
-      count: stations.length,
+      fetched,
+      matches: matches.length,
       mode: hasBbox ? 'bbox' : 'radius',
     });
 
-    if (stations.length === 0) {
+    if (matches.length === 0 && !moreUpstream) {
       throw ctx.fail('no_stations', 'No charging stations matched the search and filters.', {
         ...ctx.recoveryFor('no_stations'),
       });
     }
 
-    ctx.enrich.total(stations.length);
-    if (stations.length >= input.maxresults) {
-      ctx.enrich.truncated({ shown: stations.length, cap: input.maxresults });
+    const stations = matches.slice(input.offset, input.offset + input.maxresults);
+    /** One past the last station on this page — both the next offset and the more-left test. */
+    const pageEnd = input.offset + stations.length;
+    const moreRetrieved = matches.length > pageEnd;
+
+    ctx.enrich.total(matches.length);
+    if (moreRetrieved || moreUpstream) {
+      ctx.enrich.truncated({
+        shown: stations.length,
+        cap: input.maxresults,
+        guidance: truncationGuidance({
+          matched: matches.length,
+          moreRetrieved,
+          moreUpstream,
+          offset: input.offset,
+          pageSize: stations.length,
+          maxresults: input.maxresults,
+        }),
+      });
+      if (moreRetrieved) ctx.enrich({ nextOffset: pageEnd });
+    } else if (stations.length === 0) {
+      ctx.enrich.notice(
+        `This search matched ${matches.length} station(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
+      );
     }
 
     return {
@@ -245,7 +318,8 @@ export const findStations = tool('openchargemap_find_stations', {
   },
 
   format: (result) => {
-    const lines = [`Found ${result.stations.length} station(s). ${result.searchSummary}`, ''];
+    // "Showing", not "Found" — this is one page, and the match count rides the enrichment trailer.
+    const lines = [`Showing ${result.stations.length} station(s). ${result.searchSummary}`, ''];
     for (const s of result.stations) {
       lines.push(renderStationBlock(s), '');
     }
@@ -255,9 +329,11 @@ export const findStations = tool('openchargemap_find_stations', {
 });
 
 /**
- * Name the specific location problem the caller hit. Reached only when exactly one search mode was
- * not supplied, so a bounding box present here means a center was supplied alongside it, and its
- * absence means at most one of latitude/longitude arrived.
+ * Name the specific location problem the caller hit. Every message states what actually arrived: a
+ * bounding box present here means at least one coordinate came with it, and its absence means at
+ * most one of latitude/longitude arrived. A confidently-worded wrong diagnosis costs the caller
+ * more than a vague one, so the lone-coordinate cases name the coordinate they got rather than
+ * borrowing the full-center wording.
  */
 function locationFailure(supplied: {
   hasLatitude: boolean;
@@ -265,7 +341,11 @@ function locationFailure(supplied: {
   hasBbox: boolean;
 }): string {
   if (supplied.hasBbox) {
-    return 'Both a center (latitude + longitude) and a boundingbox were supplied — provide exactly one, not both.';
+    if (supplied.hasLatitude && supplied.hasLongitude) {
+      return 'Both a center (latitude + longitude) and a boundingbox were supplied — provide exactly one, not both.';
+    }
+    const coordinate = supplied.hasLatitude ? 'latitude' : 'longitude';
+    return `A ${coordinate} and a boundingbox were supplied, and a ${coordinate} on its own is not a center — provide either a center (latitude + longitude) or a boundingbox, not both.`;
   }
   if (supplied.hasLatitude) {
     return 'Longitude is missing — a center search needs latitude and longitude together.';
@@ -274,6 +354,46 @@ function locationFailure(supplied: {
     return 'Latitude is missing — a center search needs latitude and longitude together.';
   }
   return 'No search area was provided — supply either a center (latitude + longitude) or a boundingbox.';
+}
+
+/**
+ * Say what the page left out and how to reach it. Two things can be missing at once — matches this
+ * page skipped, and stations the search never retrieved — so the offset advice and the narrow-the-
+ * search advice compose into one notice rather than one overwriting the other.
+ *
+ * `moreUpstream` decides what the notice is allowed to claim, and it is the whole reason this takes
+ * two flags rather than one. A candidate page that came back short retrieved everything Open Charge
+ * Map holds for the area, so `matched` IS the match count and there is nothing deeper to widen
+ * toward — telling that caller to narrow the area would be both false and the opposite of what
+ * recovers their data (paging does). A full page leaves `matched` a floor, so no sentence may state
+ * it as the number of matching stations.
+ */
+function truncationGuidance(page: {
+  matched: number;
+  maxresults: number;
+  moreRetrieved: boolean;
+  moreUpstream: boolean;
+  offset: number;
+  pageSize: number;
+}): string {
+  const total = page.moreUpstream
+    ? `${page.matched} stations retrieved`
+    : `${page.matched} matching stations`;
+  const holdsMore =
+    'Open Charge Map holds more stations than this search retrieved — narrow the area or add filters to reach them.';
+  const deeper = page.moreUpstream ? ` ${holdsMore}` : '';
+  /** Only a sentence that names the count may call it a floor; the zero-match branch names none. */
+  const counted = page.moreUpstream ? ` That count is a floor: ${holdsMore}` : '';
+  if (page.moreRetrieved) {
+    return `Showing ${page.pageSize} of ${total}, from offset ${page.offset}. Pass offset ${page.offset + page.pageSize} on the same search for the next ${page.maxresults}.${counted}`;
+  }
+  if (page.matched === 0) {
+    return `No station this search retrieved met the filters. Relax minchargepoints or the other filters.${deeper}`;
+  }
+  if (page.pageSize === 0) {
+    return `This search retrieved ${page.matched} station(s), so offset ${page.offset} is past the last one. Lower offset to read them.${counted}`;
+  }
+  return `Showing ${page.pageSize} of ${total}, from offset ${page.offset} — every station this search retrieved.${counted}`;
 }
 
 /** Compose a human-readable echo of the resolved search and active filters. */
@@ -299,6 +419,7 @@ function buildSearchSummary(input: z.infer<typeof FindStationsInput>, hasBbox: b
   if (input.statustypeid !== undefined)
     bits.push(`statustypeid=${[input.statustypeid].flat().join(',')}`);
   if (input.minchargepoints !== undefined) bits.push(`minchargepoints=${input.minchargepoints}`);
+  if (input.offset > 0) bits.push(`offset=${input.offset}`);
   bits.push(`maxresults=${input.maxresults}`);
   return `${bits.join('; ')}.`;
 }
