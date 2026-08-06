@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-06
+
+Registry-status honesty and check-in outcomes in the station renderers; mcp-ts-core ^0.11.1; broadened test coverage
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-07-04 · 🛡️ Security
 
 Local minchargepoints enforcement and zero-coordinate filtering in find_stations; tightened tool/resource descriptions; dependency bump clears a moderate js-yaml DoS advisory

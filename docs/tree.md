@@ -1,6 +1,6 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 17:29:17
+Generated on: 2026-08-06 16:14:06
 
 ```text
 openchargemap-mcp-server/
@@ -11,10 +11,12 @@ openchargemap-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -154,11 +156,20 @@ openchargemap-mcp-server/
 ├── tests/
 │   ├── fixtures/
 │   │   └── ocm.ts
+│   ├── fuzz/
+│   │   └── openchargemap-response.fuzz.test.ts
+│   ├── integration/
+│   │   ├── tool-boundary.test.ts
+│   │   └── tool-contract.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── station.resource.test.ts
 │   ├── services/
-│   │   └── openchargemap-service.test.ts
+│   │   ├── attribution.test.ts
+│   │   ├── openchargemap-service.test.ts
+│   │   └── reference-data-service.test.ts
+│   ├── smoke/
+│   │   └── definitions.smoke.test.ts
 │   └── tools/
 │       ├── find-stations.tool.test.ts
 │       ├── get-station-comments.tool.test.ts
@@ -166,6 +177,7 @@ openchargemap-mcp-server/
 │       └── lookup-reference.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md
