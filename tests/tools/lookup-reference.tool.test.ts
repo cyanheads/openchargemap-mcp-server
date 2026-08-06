@@ -128,17 +128,91 @@ describe('openchargemap_lookup_reference', () => {
     );
     expect(result.matches).toHaveLength(5);
     const enrichment = getEnrichment(c) as {
-      truncated?: boolean;
-      totalCount?: number;
+      nextOffset?: number;
       notice?: string;
+      totalCount?: number;
+      truncated?: boolean;
     };
     expect(enrichment.truncated).toBe(true);
     expect(enrichment.totalCount).toBeGreaterThan(5);
+    expect(enrichment.nextOffset).toBe(5);
     // enrich.truncated() routes its guidance through `notice`, and the effective-output parse
     // strips any enrichment key the block does not declare — so the declaration is what keeps the
-    // "raise limit / pass a query" path on the wire, not the write.
-    expect(enrichment.notice).toMatch(/raise limit/i);
+    // continuation advice on the wire, not the write.
+    expect(enrichment.notice).toContain('offset 5');
     expect(lookupReference.enrichment).toHaveProperty('notice');
+    expect(lookupReference.enrichment).toHaveProperty('nextOffset');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  // The old guidance told a caller already at limit=100 to raise limit — the only value it named
+  // was the one that could not move.
+  it('never advises raising a limit the caller has already exhausted', async () => {
+    const c = ctx();
+    await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', limit: 100 }),
+      c,
+    );
+
+    const notice = getEnrichment(c).notice as string;
+    expect(notice).not.toMatch(/raise limit/i);
+    expect(notice).toContain('offset 100');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('reaches entries past the browse cap by offset', async () => {
+    const first = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', limit: 5 }),
+      ctx(),
+    );
+    const second = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', limit: 5, offset: 5 }),
+      ctx(),
+    );
+
+    const firstIds = first.matches.map((m) => m.id);
+    const secondIds = second.matches.map((m) => m.id);
+    expect(secondIds).toHaveLength(5);
+    expect(firstIds.some((id) => secondIds.includes(id))).toBe(false);
+    // Browse order is by ID, so the second page continues where the first stopped.
+    expect(Math.min(...secondIds)).toBeGreaterThan(Math.max(...firstIds));
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('reports the full match count for a query, not the page size, and pages it', async () => {
+    const c = ctx();
+    const capped = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'connectiontypes', query: 'Type', limit: 1 }),
+      c,
+    );
+
+    const enrichment = getEnrichment(c) as { nextOffset?: number; totalCount?: number };
+    expect(capped.matches).toHaveLength(1);
+    expect(enrichment.totalCount).toBeGreaterThan(1);
+    expect(enrichment.nextOffset).toBe(1);
+
+    const next = await lookupReference.handler(
+      lookupReference.input.parse({
+        category: 'connectiontypes',
+        query: 'Type',
+        limit: 1,
+        offset: 1,
+      }),
+      ctx(),
+    );
+    expect(next.matches[0]!.id).not.toBe(capped.matches[0]!.id);
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('says the offset is past the end rather than reporting no_match', async () => {
+    const c = ctx();
+    const result = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'connectiontypes', query: 'CHAdeMO', offset: 500 }),
+      c,
+    );
+
+    expect(result.matches).toEqual([]);
+    expect(getEnrichment(c).notice).toMatch(/past the end/i);
   });
 
   it('surfaces statustypes operational detail and snapshotDate', async () => {
@@ -148,7 +222,21 @@ describe('openchargemap_lookup_reference', () => {
     );
     expect(result.matches.some((m) => m.detail?.includes('operational'))).toBe(true);
     expect(result.snapshotDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+    // This server ran with the refresh off, so the vintage it reports is the bundle's own.
+    expect(result.source).toBe('bundled');
     expect(result).toEqual(expect.schemaMatching(lookupReference.output));
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+  it('renders the vintage and its source into the text surface', async () => {
+    const result = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'connectiontypes', query: 'CHAdeMO' }),
+      ctx(),
+    );
+    const text = (lookupReference.format!(result)[0] as { text: string }).text;
+
+    expect(text).toContain(`Reference data: bundled (captured ${result.snapshotDate})`);
   });
 
   it.each([

@@ -14,7 +14,7 @@ import type { ReferenceCategory } from '@/services/reference-data/types.js';
 export const lookupReference = tool('openchargemap_lookup_reference', {
   title: 'openchargemap-mcp-server: lookup reference',
   description:
-    'Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" -> a connectiontypeid, "ChargePoint" -> an operatorid, "Public - Pay At Location" -> a usagetypeid, "France" or "FR" -> a country. Omit the query to browse the whole category.',
+    'Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" -> a connectiontypeid, "ChargePoint" -> an operatorid, "Public - Pay At Location" -> a usagetypeid, "France" or "FR" -> a country. Omit the query to browse the whole category. Large categories come back one page at a time: when a page reports truncated, repeat the call with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 
   input: z.object({
@@ -46,6 +46,14 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
       .default(25)
       .describe(
         'Maximum entries to return when browsing or when a query matches several. Max 100.',
+      ),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Entries to skip before the returned page, for reading past a truncated result. Repeat the same call with the nextOffset value the previous one reported. Applies to browsing and to a query with many matches alike; the order is stable, so every entry is reachable by paging.',
       ),
   }),
 
@@ -89,7 +97,12 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
     snapshotDate: z
       .string()
       .describe(
-        'Date the bundled reference snapshot was captured, so callers know the data vintage.',
+        'Date the reference data in this response was captured, so callers know its vintage — the day the live refresh ran when source is "live", the bundled snapshot\'s own capture date when source is "bundled". Read it together with source: the same date can mean either a fresh fetch or a freshly cut bundle.',
+      ),
+    source: z
+      .enum(['live', 'bundled'])
+      .describe(
+        'Where these entries came from. "live" — a startup refresh from Open Charge Map returned a complete set and is what is being served. "bundled" — the snapshot shipped with the server is being served, either because the refresh is switched off or because it failed and the server fell back to the bundle.',
       ),
     attribution: z
       .string()
@@ -97,14 +110,24 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Number of entries returned.'),
-    truncated: z.boolean().optional().describe('True when a browse was capped at limit.'),
-    shown: z.number().optional().describe('Number of entries returned when the cap was hit.'),
-    cap: z.number().optional().describe('The limit that was applied.'),
-    notice: z
-      .string()
+    totalCount: z
+      .number()
+      .describe(
+        'Entries matching before the offset/limit page was taken — the whole category when browsing, every match when a query was given.',
+      ),
+    truncated: z
+      .boolean()
       .optional()
-      .describe('How to reach the entries beyond the cap when a browse was capped.'),
+      .describe('True when matching entries were left out of the returned page.'),
+    shown: z.number().optional().describe('Entries in the returned page.'),
+    cap: z.number().optional().describe('The limit that was applied.'),
+    nextOffset: z
+      .number()
+      .optional()
+      .describe(
+        'The offset to pass on an otherwise identical call to read the next page. Absent on the last page.',
+      ),
+    notice: z.string().optional().describe('How to reach the entries this page left out.'),
   },
 
   errors: [
@@ -122,38 +145,38 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
     const category = input.category as ReferenceCategory;
     const filterParam = ref.filterParam(category);
 
-    if (input.query !== undefined) {
-      const matches = ref.resolve(category, input.query, input.limit);
-      if (matches.length === 0) {
-        throw ctx.fail('no_match', `No ${category} entry matched "${input.query}".`, {
-          ...ctx.recoveryFor('no_match'),
-        });
-      }
-      ctx.enrich.total(matches.length);
-      return {
-        category,
-        matches,
-        ...(filterParam ? { filterParam } : {}),
-        snapshotDate: ref.snapshotDate,
-        attribution: ATTRIBUTION,
-      };
+    const { matches, total } =
+      input.query === undefined
+        ? ref.browse(category, input.limit, input.offset)
+        : ref.resolve(category, input.query, input.limit, input.offset);
+
+    if (input.query !== undefined && total === 0) {
+      throw ctx.fail('no_match', `No ${category} entry matched "${input.query}".`, {
+        ...ctx.recoveryFor('no_match'),
+      });
     }
 
-    // Browse mode.
-    const { matches, total } = ref.browse(category, input.limit);
     ctx.enrich.total(total);
-    if (total > input.limit) {
+    const remaining = total - (input.offset + matches.length);
+    if (remaining > 0) {
       ctx.enrich.truncated({
         shown: matches.length,
         cap: input.limit,
-        guidance: `Showing ${matches.length} of ${total} ${category}. Pass a query to narrow, or raise limit (max 100).`,
+        guidance: `Showing ${matches.length} of ${total} ${category} from offset ${input.offset}. Pass offset ${input.offset + matches.length} on the same call for the next ${input.limit}${input.query === undefined ? ', or pass a query to narrow' : ''}.`,
       });
+      ctx.enrich({ nextOffset: input.offset + matches.length });
+    } else if (matches.length === 0) {
+      ctx.enrich.notice(
+        `This call matched ${total} ${category}, so offset ${input.offset} is past the end. Lower offset to read them.`,
+      );
     }
+
     return {
       category,
       matches,
       ...(filterParam ? { filterParam } : {}),
       snapshotDate: ref.snapshotDate,
+      source: ref.source,
       attribution: ATTRIBUTION,
     };
   },
@@ -172,7 +195,11 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
     }
     if (result.filterParam)
       lines.push('', `Use these ids as find_stations \`${result.filterParam}\`.`);
-    lines.push('', `Snapshot: ${result.snapshotDate}`, result.attribution);
+    lines.push(
+      '',
+      `Reference data: ${result.source} (captured ${result.snapshotDate})`,
+      result.attribution,
+    );
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

@@ -15,7 +15,7 @@ import {
   type ReferenceEntry,
 } from '@/data/ocm-reference-data.js';
 import { statusAvailability } from '@/services/openchargemap/attribution.js';
-import type { ReferenceCategory, ReferenceMatch } from './types.js';
+import type { ReferenceCategory, ReferenceMatch, ReferencePage, ReferenceSource } from './types.js';
 
 /** The `find_stations` input parameter each category's IDs feed (omitted where there's no direct filter). */
 const FILTER_PARAM: Partial<Record<ReferenceCategory, string>> = {
@@ -79,10 +79,17 @@ interface CategoryIndex {
 export class ReferenceDataService {
   private indices = new Map<ReferenceCategory, CategoryIndex>();
 
+  /** Vintage of the data the indices actually hold, not of the bundle they may have replaced. */
+  private activeDate: string = REFERENCE_SNAPSHOT_DATE;
+
+  private activeSource: ReferenceSource = 'bundled';
+
   constructor(private readonly serverConfig: ServerConfig) {}
 
   /** Load the bundled snapshot, optionally refresh from the live endpoint, then build indices. */
   async setup(): Promise<void> {
+    this.activeDate = REFERENCE_SNAPSHOT_DATE;
+    this.activeSource = 'bundled';
     let data: Record<ReferenceCategory, ReferenceEntry[]> = {
       connectiontypes: [...REFERENCE_SNAPSHOT.connectiontypes],
       operators: [...REFERENCE_SNAPSHOT.operators],
@@ -95,15 +102,31 @@ export class ReferenceDataService {
 
     if (this.serverConfig.referenceRefresh) {
       const refreshed = await this.tryRefresh();
-      if (refreshed) data = refreshed;
+      if (refreshed) {
+        data = refreshed;
+        // `/referencedata` carries no dataset date or version, and its response has no
+        // Last-Modified or ETag header — the moment the fetch succeeded is the only vintage
+        // signal the endpoint offers. `tryRefresh` returns undefined on every failure mode, so
+        // reaching here is what makes the live set active and the live date true.
+        this.activeDate = new Date().toISOString().slice(0, 10);
+        this.activeSource = 'live';
+      }
     }
 
     this.buildIndices(data);
   }
 
-  /** Date the active reference data was captured (bundled snapshot vintage). */
+  /**
+   * Date the reference data now in memory was captured — the day of a successful live refresh, or
+   * the bundled snapshot's own capture date when the bundle is what is being served.
+   */
   get snapshotDate(): string {
-    return REFERENCE_SNAPSHOT_DATE;
+    return this.activeDate;
+  }
+
+  /** Which of the two sources the active data came from. Pairs with {@link snapshotDate}. */
+  get source(): ReferenceSource {
+    return this.activeSource;
   }
 
   /** The `find_stations` filter param a category's IDs feed, or undefined when there is none. */
@@ -114,12 +137,14 @@ export class ReferenceDataService {
   /**
    * Resolve a query to matching reference entries within a category, best/exact first.
    * Strict normalized token match over the complete category set, plus curated connector aliases.
-   * Returns up to `limit` matches; an empty array means no match (caller surfaces a browse hint).
+   * Ranks every match, then returns the `[offset, offset + limit)` window alongside the full match
+   * count so the caller can disclose and page what the window left out. `total: 0` means no match
+   * (caller surfaces a browse hint).
    */
-  resolve(category: ReferenceCategory, query: string, limit: number): ReferenceMatch[] {
+  resolve(category: ReferenceCategory, query: string, limit: number, offset = 0): ReferencePage {
     const index = this.requireIndex(category);
     const normalizedQuery = normalize(query);
-    if (normalizedQuery.length === 0) return [];
+    if (normalizedQuery.length === 0) return { matches: [], total: 0 };
 
     const ranked = new Map<number, number>(); // id → rank (lower is better)
 
@@ -151,19 +176,25 @@ export class ReferenceDataService {
       }
     }
 
-    const matches: ReferenceMatch[] = [];
-    for (const [id] of [...ranked.entries()].sort((a, b) => a[1] - b[1])) {
-      if (matches.length >= limit) break;
-      const entry = index.byId.get(id);
-      if (entry) matches.push(this.toMatch(category, entry));
-    }
-    return matches;
+    const ordered = [...ranked.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([id]) => index.byId.get(id))
+      .filter((entry): entry is ReferenceEntry => entry !== undefined);
+    return {
+      matches: ordered.slice(offset, offset + limit).map((e) => this.toMatch(category, e)),
+      total: ordered.length,
+    };
   }
 
-  /** Browse a full category, ordered by ID, up to `limit`. Returns the total count for truncation. */
-  browse(category: ReferenceCategory, limit: number): { matches: ReferenceMatch[]; total: number } {
+  /**
+   * Browse a full category, ordered by ID. Returns the `[offset, offset + limit)` window and the
+   * full category total, so the caller can disclose and page what the window left out.
+   */
+  browse(category: ReferenceCategory, limit: number, offset = 0): ReferencePage {
     const index = this.requireIndex(category);
-    const matches = index.entries.slice(0, limit).map((e) => this.toMatch(category, e));
+    const matches = index.entries
+      .slice(offset, offset + limit)
+      .map((e) => this.toMatch(category, e));
     return { matches, total: index.entries.length };
   }
 

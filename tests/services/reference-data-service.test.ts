@@ -58,6 +58,7 @@ describe('ReferenceDataService', () => {
     await service.setup();
 
     expect(service.snapshotDate).toBe(REFERENCE_SNAPSHOT_DATE);
+    expect(service.source).toBe('bundled');
     expect(service.labelFor('connectiontypes', 33)).toBe('CCS (Type 2)');
     expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
@@ -66,15 +67,15 @@ describe('ReferenceDataService', () => {
     const service = new ReferenceDataService(bundledConfig);
     await service.setup();
 
-    expect(service.resolve('connectiontypes', '  cCs  ', 10).map((match) => match.id)).toEqual([
-      33, 32,
-    ]);
-    expect(service.resolve('connectiontypes', 'CHA-de-MO', 10)[0]).toMatchObject({
+    expect(
+      service.resolve('connectiontypes', '  cCs  ', 10).matches.map((match) => match.id),
+    ).toEqual([33, 32]);
+    expect(service.resolve('connectiontypes', 'CHA-de-MO', 10).matches[0]).toMatchObject({
       id: 2,
       title: 'CHAdeMO',
     });
     expect(
-      service.resolve('operators', '  cHaRgEpOiNt  ', 10).some((match) => match.id === 5),
+      service.resolve('operators', '  cHaRgEpOiNt  ', 10).matches.some((match) => match.id === 5),
     ).toBe(true);
   });
 
@@ -82,7 +83,7 @@ describe('ReferenceDataService', () => {
     const service = new ReferenceDataService(bundledConfig);
     await service.setup();
 
-    const matches = service.resolve('connectiontypes', 'Type 2', 10);
+    const { matches } = service.resolve('connectiontypes', 'Type 2', 10);
     expect(matches.slice(0, 2).map((match) => match.id)).toEqual([25, 1036]);
     expect(new Set(matches.map((match) => match.id)).size).toBe(matches.length);
   });
@@ -91,7 +92,10 @@ describe('ReferenceDataService', () => {
     const service = new ReferenceDataService(bundledConfig);
     await service.setup();
 
-    expect(service.resolve('operators', 'zzzz-not-a-network', 10)).toEqual([]);
+    expect(service.resolve('operators', 'zzzz-not-a-network', 10)).toEqual({
+      matches: [],
+      total: 0,
+    });
     expect(service.labelFor('operators', 999_999_999)).toBeUndefined();
   });
 
@@ -104,6 +108,42 @@ describe('ReferenceDataService', () => {
     expect(page.total).toBeGreaterThan(3);
     expect(page.matches.map((match) => match.id)).toEqual(
       [...page.matches.map((match) => match.id)].sort((a, b) => a - b),
+    );
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('walks a whole category through consecutive browse offsets without gaps or repeats', async () => {
+    const service = new ReferenceDataService(bundledConfig);
+    await service.setup();
+
+    const { total } = service.browse('countries', 1);
+    const seen: number[] = [];
+    for (let offset = 0; offset < total; offset += 40) {
+      seen.push(...service.browse('countries', 40, offset).matches.map((match) => match.id));
+    }
+
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+    expect(service.browse('countries', 40, total).matches).toEqual([]);
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('reports every query match as the total and pages the remainder by offset', async () => {
+    const service = new ReferenceDataService(bundledConfig);
+    await service.setup();
+
+    const all = service.resolve('connectiontypes', 'Type', 100);
+    expect(all.total).toBeGreaterThan(2);
+
+    const firstTwo = service.resolve('connectiontypes', 'Type', 2);
+    const nextTwo = service.resolve('connectiontypes', 'Type', 2, 2);
+
+    expect(firstTwo.total).toBe(all.total); // total is the match count, not the page size
+    expect(firstTwo.matches.map((match) => match.id)).toEqual(
+      all.matches.slice(0, 2).map((match) => match.id),
+    );
+    expect(nextTwo.matches.map((match) => match.id)).toEqual(
+      all.matches.slice(2, 4).map((match) => match.id),
     );
   });
 
@@ -127,6 +167,8 @@ describe('ReferenceDataService', () => {
     expect(service.labelFor('connectiontypes', 9001)).toBeUndefined();
     expect(service.labelFor('connectiontypes', 33)).toBe('CCS (Type 2)');
     expect(service.snapshotDate).toBe(REFERENCE_SNAPSHOT_DATE);
+    // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+    expect(service.source).toBe('bundled');
   });
 
   it('falls back to the bundle when the live request fails', async () => {
@@ -136,6 +178,10 @@ describe('ReferenceDataService', () => {
 
     expect(service.labelFor('operators', 5)).toBe('ChargePoint');
     expect(service.snapshotDate).toBe(REFERENCE_SNAPSHOT_DATE);
+    // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+    // A failed refresh serves the bundle, so it reports the bundle — the date does not drift
+    // forward to the day the failed attempt was made.
+    expect(service.source).toBe('bundled');
   });
 
   it('throws a clear accessor error before singleton initialization', () => {
@@ -143,7 +189,7 @@ describe('ReferenceDataService', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
-  it.skip('reports the live refresh date instead of the bundled snapshot date', async () => {
+  it('reports the live refresh date instead of the bundled snapshot date', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-02T12:00:00Z'));
     fetchWithTimeout.mockResolvedValue(jsonResponse(liveReferenceData));
@@ -151,19 +197,39 @@ describe('ReferenceDataService', () => {
     await service.setup();
 
     expect(service.snapshotDate).toBe('2026-08-02');
+    // The live set is what is indexed, so the reported vintage has to move with it.
+    expect(service.labelFor('operators', 9002)).toBe('Live Network');
+    expect(service.source).toBe('live');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
-  it.skip('discloses the live source and refresh date through lookup_reference', async () => {
+  it('discloses the live source and refresh date through lookup_reference', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-02T12:00:00Z'));
     fetchWithTimeout.mockResolvedValue(jsonResponse(liveReferenceData));
     await initReferenceDataService({ ...bundledConfig, referenceRefresh: true });
 
-    const result = lookupReference.handler(
+    const result = await lookupReference.handler(
       lookupReference.input.parse({ category: 'operators', query: 'Live Network' }),
       createMockContext({ errors: lookupReference.errors }),
-    ) as { snapshotDate: string; source?: 'live' | 'bundled' };
+    );
     expect(result).toMatchObject({ source: 'live', snapshotDate: '2026-08-02' });
+    expect(result).toEqual(expect.schemaMatching(lookupReference.output));
+    // Both facts reach content[]-only clients too, not just structuredContent.
+    const text = (lookupReference.format!(result)[0] as { text: string }).text;
+    expect(text).toContain('live');
+    expect(text).toContain('2026-08-02');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+  it('reports the bundled vintage through lookup_reference when the refresh is off', async () => {
+    await initReferenceDataService(bundledConfig);
+
+    const result = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', query: 'ChargePoint' }),
+      createMockContext({ errors: lookupReference.errors }),
+    );
+    expect(result).toMatchObject({ source: 'bundled', snapshotDate: REFERENCE_SNAPSHOT_DATE });
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 });
