@@ -46,6 +46,16 @@ function joinFilter(value: number | number[] | undefined): string | undefined {
 }
 
 /**
+ * True when a decoded `/v3/poi` array member is readable as a POI record. Deliberately shallow —
+ * only object-ness, no field requirements: OCM omits most fields on legitimately sparse records, so
+ * any stricter shape check would reject real stations. It exists to stop a `null`, string, or number
+ * member from reaching normalization, where property access throws a raw `TypeError`.
+ */
+function isPoiRecord(value: unknown): value is RawPoi {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
  * True when a raw POI carries usable coordinates. OCM stores some records at exactly 0,0 (a
  * placeholder that would otherwise surface as a false distance-0 match) and omits lat/lng on others
  * (which `normalizeStation` then defaults to 0,0). Both are unusable for a proximity search, so it
@@ -218,16 +228,49 @@ export class OpenChargeMapService {
         } catch (error) {
           throw this.translateFetchError(error, ctx);
         }
-        const data = (await response.json()) as RawPoi[];
+        let data: unknown;
+        try {
+          data = await response.json();
+        } catch (error) {
+          throw this.malformedResponse(
+            'Open Charge Map returned a body that is not valid JSON.',
+            ctx,
+            error,
+          );
+        }
         if (!Array.isArray(data)) {
-          throw serviceUnavailable('Open Charge Map returned an unexpected (non-array) response.', {
-            reason: 'upstream_unavailable',
-            ...ctx.recoveryFor('upstream_unavailable'),
-          });
+          throw this.malformedResponse(
+            'Open Charge Map returned an unexpected (non-array) response.',
+            ctx,
+          );
+        }
+        if (!data.every(isPoiRecord)) {
+          throw this.malformedResponse(
+            'Open Charge Map returned a station list containing an unreadable entry.',
+            ctx,
+          );
         }
         return data;
       },
       { operation, context: reqCtx, baseDelayMs: 1500, signal: ctx.signal },
+    );
+  }
+
+  /**
+   * One envelope for every unreadable response body — invalid JSON, a non-array payload, or an
+   * array carrying an unreadable entry. All three are the same client-facing failure as a non-2xx
+   * (OCM did not return usable data), so they carry the declared `upstream_unavailable` reason and
+   * stay retryable rather than surfacing as a raw parser exception.
+   */
+  private malformedResponse(message: string, ctx: Context, cause?: unknown): Error {
+    return serviceUnavailable(
+      message,
+      {
+        reason: 'upstream_unavailable',
+        retryable: true,
+        ...ctx.recoveryFor('upstream_unavailable'),
+      },
+      { cause },
     );
   }
 

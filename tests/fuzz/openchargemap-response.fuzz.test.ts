@@ -196,7 +196,7 @@ describe('OCM response parser fuzzing', () => {
   );
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/15
-  it.skip('maps malformed array members to ServiceUnavailable instead of leaking a TypeError', async () => {
+  it('maps malformed array members to ServiceUnavailable instead of leaking a TypeError', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([null, 'bad-record', 42]));
     const service = new OpenChargeMapService(serverConfig);
 
@@ -209,7 +209,7 @@ describe('OCM response parser fuzzing', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/15
-  it.skip('maps invalid JSON parsing to ServiceUnavailable instead of leaking SyntaxError', async () => {
+  it('maps invalid JSON parsing to ServiceUnavailable instead of leaking SyntaxError', async () => {
     fetchWithTimeout.mockResolvedValue({
       json: () => Promise.reject(new SyntaxError('Unexpected token')),
     } as Response);
@@ -217,6 +217,33 @@ describe('OCM response parser fuzzing', () => {
 
     await expect(
       service.searchPois({ maxresults: 1, latitude: 0, longitude: 0 }, ctx(105)),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable' },
+    });
+  });
+
+  // The whole response is rejected rather than the bad rows discarded, so a partially-readable
+  // body cannot surface as a short but plausible-looking station list.
+  it('rejects the whole body when only one member is unreadable', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([sparsePoi(1), null]));
+    const service = new OpenChargeMapService(serverConfig);
+
+    await expect(
+      service.searchPois({ maxresults: 2, latitude: 0, longitude: 0 }, ctx(106)),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable', retryable: true },
+    });
+  });
+
+  // The same guard sits on the shared fetch path, so the detail surface is covered too.
+  it('maps an unreadable detail member to ServiceUnavailable', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse(['bad-record']));
+    const service = new OpenChargeMapService(serverConfig);
+
+    await expect(
+      service.getPoi(145_452, { includeComments: true }, ctx(107)),
     ).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'upstream_unavailable' },
