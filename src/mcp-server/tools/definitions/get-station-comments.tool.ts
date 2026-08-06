@@ -20,7 +20,7 @@ import {
 export const getStationComments = tool('openchargemap_get_station_comments', {
   title: 'openchargemap-mcp-server: get station comments',
   description:
-    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings, dates, and the outcome the driver recorded ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), alongside the station\'s current registry status and last-verified date, surfacing mismatches like "listed operational, but the last few check-ins report a fault."',
+    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings, dates, and the outcome the driver recorded ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), alongside the station\'s current registry status and last-verified date, surfacing mismatches like "listed operational, but the last few check-ins report a fault." A busy station\'s check-ins come back one page at a time: when a page reports truncated, repeat the call with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -32,6 +32,14 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       .max(100)
       .default(25)
       .describe('Maximum comments to return, newest first. Max 100.'),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Comments to skip before the returned page, for reading past a truncated result. Repeat the same call with the nextOffset value the previous one reported. Ordering is newest-first and stable, but a check-in posted between pages shifts what a later offset lands on.',
+      ),
   }),
 
   output: z.object({
@@ -61,7 +69,12 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
     comments: z
       .array(CommentSchema)
       .describe(
-        'Community comments, newest first. Empty array means OCM has no check-ins for this station — absence of reports is not evidence the charger works.',
+        'The requested page of community comments, newest first — offset/maxresults applied. Empty with totalComments 0 means OCM has no check-ins for this station (absence of reports is not evidence the charger works); empty with a non-zero totalComments means the offset is past the last comment.',
+      ),
+    totalComments: z
+      .number()
+      .describe(
+        'Comments this station has on record — the whole set, before offset/maxresults selected the page in comments. reliabilityNote counts its fault ratio over this population, not over the page.',
       ),
     reliabilityNote: z
       .string()
@@ -75,11 +88,29 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Number of comments returned.'),
-    truncated: z.boolean().optional().describe('True when comments were capped at maxresults.'),
-    shown: z.number().optional().describe('Number of comments returned when the cap was hit.'),
+    totalCount: z
+      .number()
+      .describe(
+        'Comments this station has on record, before the offset/maxresults page was taken — the complete count, not the page size.',
+      ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when comments were left out of the returned page.'),
+    shown: z.number().optional().describe('Comments in the returned page.'),
     cap: z.number().optional().describe('The maxresults cap that was applied.'),
-    notice: z.string().optional().describe('Guidance when the station has no check-ins on record.'),
+    nextOffset: z
+      .number()
+      .optional()
+      .describe(
+        'The offset to pass on an otherwise identical call to read the next page. Absent on the last page.',
+      ),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'How to reach the comments this page left out, or why the station has none on record.',
+      ),
   },
 
   errors: [
@@ -119,23 +150,29 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
     }
 
     const allComments = station.comments ?? [];
-    const comments = allComments.slice(0, input.maxresults);
+    const comments = allComments.slice(input.offset, input.offset + input.maxresults);
     ctx.log.info('OCM comments fetched', {
       id: input.id,
       total: allComments.length,
       shown: comments.length,
     });
 
-    ctx.enrich.total(comments.length);
-    if (allComments.length > input.maxresults) {
+    ctx.enrich.total(allComments.length);
+    const remaining = allComments.length - (input.offset + comments.length);
+    if (remaining > 0) {
       ctx.enrich.truncated({
         shown: comments.length,
         cap: input.maxresults,
-        guidance: `Showing ${comments.length} of ${allComments.length} comments (newest first). Raise maxresults (max 100) for more.`,
+        guidance: `Showing ${comments.length} of ${allComments.length} comments (newest first) from offset ${input.offset}. Pass offset ${input.offset + comments.length} on the same call for the next ${input.maxresults}.`,
       });
-    } else if (comments.length === 0) {
+      ctx.enrich({ nextOffset: input.offset + comments.length });
+    } else if (allComments.length === 0) {
       ctx.enrich.notice(
         'No community check-ins on record for this station. Absence of reports is not evidence the charger works.',
+      );
+    } else if (comments.length === 0) {
+      ctx.enrich.notice(
+        `This station has ${allComments.length} comment(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
       );
     }
 
@@ -158,6 +195,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
         ? { dateLastVerified: station.dateLastVerified }
         : {}),
       comments,
+      totalComments: allComments.length,
       ...(reliabilityNote ? { reliabilityNote } : {}),
       attribution: ATTRIBUTION,
     };
@@ -176,21 +214,33 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       '',
     ];
 
-    if (result.comments.length === 0) {
+    // Every count below states its own population. The page and the station's full set are
+    // different numbers, and reliabilityNote's fault ratio is counted over the full set — so a
+    // header naming only the page would leave the two lines silently comparing different things.
+    const paged = result.comments.length;
+    const onRecord = result.totalComments;
+    if (onRecord === 0) {
       lines.push(
         'No community check-ins on record — absence of reports is not evidence the charger works.',
       );
+    } else if (paged === 0) {
+      lines.push(
+        `${onRecord} comment(s) on record, none on this page — the requested offset is past the last one.`,
+      );
     } else {
+      // Name the population only when a page and the full set are two different numbers; on a
+      // station whose every comment fits one page there is nothing to disambiguate.
+      const wholeSet = paged === onRecord;
+      const header = wholeSet ? `${paged} comment(s)` : `${paged} of ${onRecord} comment(s)`;
       const { shown, omitted } = visibleComments(result.comments);
       if (shown.length === 0) {
-        lines.push(
-          `${result.comments.length} comment(s), none carrying text, a rating, or a check-in outcome.`,
-        );
+        lines.push(`${header}, none carrying text, a rating, or a check-in outcome.`);
       } else {
-        lines.push(`${result.comments.length} comment(s), newest first:`);
+        lines.push(`${header}, newest first:`);
         for (const c of shown) lines.push(`- ${renderComment(c)}`);
         if (omitted > 0) {
-          lines.push(`(${omitted} not listed — no text, rating, or check-in outcome)`);
+          const scope = wholeSet ? '' : ` of these ${paged}`;
+          lines.push(`(${omitted}${scope} not listed — no text, rating, or check-in outcome)`);
         }
       }
     }

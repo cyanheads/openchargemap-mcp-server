@@ -102,9 +102,123 @@ describe('openchargemap_get_station_comments', () => {
 
     expect(result.comments).toHaveLength(1);
     expect(result.comments[0]!.dateCreated).toBe('2025-06-01T10:00:00Z');
-    const enrichment = getEnrichment(c) as { truncated?: boolean; shown?: number; cap?: number };
-    expect(enrichment.truncated).toBe(true);
-    expect(enrichment.cap).toBe(1);
+    // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+    // totalCount is the station's whole comment count, not the page size — a client reading only
+    // structured fields could not previously see how much it was missing.
+    expect(getEnrichment(c)).toMatchObject({
+      totalCount: 2,
+      truncated: true,
+      shown: 1,
+      cap: 1,
+      nextOffset: 1,
+    });
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('reaches the comments past the cap by offset', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const c = ctx();
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 145452, maxresults: 1, offset: 1 }),
+      c,
+    );
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]!.dateCreated).toBe('2025-05-01T10:00:00Z'); // the older one
+    const enrichment = getEnrichment(c);
+    expect(enrichment).toMatchObject({ totalCount: 2 });
+    expect(enrichment).not.toHaveProperty('truncated');
+    expect(enrichment).not.toHaveProperty('nextOffset');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+  it('says the offset is past the end rather than reporting no check-ins on record', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const c = ctx();
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 145452, offset: 10 }),
+      c,
+    );
+
+    expect(result.comments).toEqual([]);
+    expect(getEnrichment(c).notice).toMatch(/past the end/i);
+    expect(getEnrichment(c).notice).not.toMatch(/absence of reports/i);
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
+  it('states the station total alongside the page count when the page is only part of the set', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 145452, maxresults: 1 }),
+      ctx(),
+    );
+    const text = (getStationComments.format!(result)[0] as { text: string }).text;
+
+    expect(result.totalComments).toBe(2);
+    expect(result.comments).toHaveLength(1);
+    // The header names both populations, so it can be read against the reliability note's ratio
+    // instead of silently counting a different set.
+    expect(text).toContain('1 of 2 comment(s), newest first:');
+    expect(text).toContain('1 of 2 recent comment(s) report a fault');
+    expect(result).toEqual(expect.schemaMatching(getStationComments.output));
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
+  it('leaves the header unqualified when the page is the whole set', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 145452 }),
+      ctx(),
+    );
+    const text = (getStationComments.format!(result)[0] as { text: string }).text;
+
+    expect(result.totalComments).toBe(2);
+    expect(text).toContain('2 comment(s), newest first:');
+    expect(text).not.toContain('2 of 2');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
+  it('does not claim a station has no check-ins when the offset simply overshot them', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 145452, offset: 10 }),
+      ctx(),
+    );
+    const text = (getStationComments.format!(result)[0] as { text: string }).text;
+
+    expect(result.comments).toEqual([]);
+    expect(result.totalComments).toBe(2);
+    expect(text).toContain('2 comment(s) on record, none on this page');
+    expect(text).not.toContain('No community check-ins on record');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
+  it('scopes the not-listed count to the page it was counted over', async () => {
+    const manyBlank = {
+      ...BLANK_COMMENTS_POI,
+      UserComments: [
+        {
+          ID: 9,
+          CommentType: { ID: 10, Title: 'General Comment' },
+          UserName: 'evdriver9',
+          Comment: 'Two stalls, both free.',
+          Rating: 5,
+          DateCreated: '2025-01-01T00:00:00Z',
+        },
+        ...BLANK_COMMENTS_POI.UserComments!,
+      ],
+    };
+    fetchWithTimeout.mockResolvedValue(jsonResponse([manyBlank]));
+    const result = await getStationComments.handler(
+      getStationComments.input.parse({ id: 71749, maxresults: 3 }),
+      ctx(),
+    );
+    const text = (getStationComments.format!(result)[0] as { text: string }).text;
+
+    // 4 on record, 3 on this page, 1 of those 3 carries content — every number names its own set.
+    expect(result.totalComments).toBe(4);
+    expect(text).toContain('3 of 4 comment(s), newest first:');
+    expect(text).toContain('(2 of these 3 not listed');
   });
 
   it('always requests comments embedded in the POI (includecomments=true)', async () => {

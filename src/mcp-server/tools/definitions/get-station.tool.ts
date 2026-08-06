@@ -69,7 +69,7 @@ export const getStation = tool('openchargemap_get_station', {
       .boolean()
       .default(false)
       .describe(
-        'Include community check-ins and comments inline in the response. Adds payload but gives the real-world reliability signal alongside the registry status. For comments alone, use openchargemap_get_station_comments.',
+        'Include community check-ins and comments inline in the response. Adds payload but gives the real-world reliability signal alongside the registry status. Every comment on record comes back at once, unpaged — on a station with hundreds of check-ins that is a large response, so prefer openchargemap_get_station_comments, which returns them a page at a time.',
       ),
   }),
 
