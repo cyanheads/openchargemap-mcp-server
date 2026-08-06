@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-08-06
+
+Error-path accuracy fixes, stricter input validation, and malformed-response handling
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-06
 
 Registry-status honesty and check-in outcomes in the station renderers; mcp-ts-core ^0.11.1; broadened test coverage
