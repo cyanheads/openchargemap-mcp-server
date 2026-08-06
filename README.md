@@ -1,6 +1,6 @@
 <div align="center">
   <h1>@cyanheads/openchargemap-mcp-server</h1>
-  <p><b>Find EV charging stations by location and connector, get full station detail, resolve reference IDs, and read community reliability check-ins via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Find EV charging stations worldwide by location and connector via the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.</b>
   <div>4 Tools • 1 Resource</div>
   </p>
 </div>
@@ -60,7 +60,8 @@ Full detail for one station by its numeric OCM ID (fetched with `verbose=true`).
 - Operator and network, usage and access restrictions (pay-at-location, membership, access key), number of charge points
 - General comments, usage cost, data provider, submitted media, verification recency
 - Optional inline community check-ins with `includeComments`
-- Computes a plain-prose `reliabilityNote` from observable facts (verification age, operational flag, fault-vs-positive comment counts) — no synthetic score; omitted when status is fresh and uncontested
+- Computes a plain-prose `reliabilityNote` from observable facts (verification age, registry status, operational flag, fault-vs-positive check-in counts) — no synthetic score; omitted when status is fresh and uncontested
+- A status of "Temporarily Unavailable" or "Partly Operational (Mixed)" raises a caveat of its own — OCM flags both operational, so the flag alone would read as all-clear on a station the operator has said is down
 - Obtain an ID from `openchargemap_find_stations`. UUID lookup is not supported by the OCM API.
 
 ---
@@ -81,7 +82,8 @@ Resolve Open Charge Map reference data to the integer IDs the `find_stations` fi
 
 Community check-ins for one station — the honest reliability signal beyond the operator-reported registry flag.
 
-- Returns user comments and fault reports with ratings and dates, newest first (`maxresults` caps, max 100)
+- Returns user comments and fault reports with ratings, dates, and the recorded check-in outcome ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), newest first (`maxresults` caps, max 100)
+- The check-in outcome is the charge-attempt result and drives fault detection — a failed charge counts even when it was filed as a plain comment
 - Surfaces the station's registry status, operational flag, and `dateLastVerified` alongside the comments so you can flag mismatches like "listed operational, but recent check-ins report a fault"
 - An empty result is **not** an error — a station with no check-ins returns `comments: []`; absence of reports is not evidence the charger works
 - Backed by the POI fetch with `includecomments=true` (OCM has no standalone comments endpoint)
@@ -115,8 +117,8 @@ Open Charge Map–specific:
 
 Agent-friendly output:
 
-- Reliability surfaced as first-class signal — `status`, `isOperational`, and `dateLastVerified` on every station, plus a plain-prose `reliabilityNote` derived only from observable facts (no fabricated confidence score)
-- Honest sparsity — heavily-omitted upstream fields are optional with "absence means unknown, not zero/false" descriptions; the server never invents data OCM didn't return
+- Reliability surfaced as first-class signal — `status`, `statusTypeId`, `isOperational`, and `dateLastVerified` on every station, plus a plain-prose `reliabilityNote` derived only from observable facts (no fabricated confidence score). Upstream values are passed through verbatim; where a status contradicts its own operational flag, the judgment lives in the note and the rendered text, never in the boolean
+- Honest sparsity — heavily-omitted upstream fields are optional with "absence means unknown, not zero/false" descriptions; the server never invents data OCM didn't return. An explicit `false` is a fact and reaches the text output, not just `structuredContent`
 - CC BY 4.0 attribution on every tool response and in the server-level instructions, per the data license
 
 ## Getting started

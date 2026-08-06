@@ -14,6 +14,7 @@ import {
   REFERENCE_SNAPSHOT_DATE,
   type ReferenceEntry,
 } from '@/data/ocm-reference-data.js';
+import { statusAvailability } from '@/services/openchargemap/attribution.js';
 import type { ReferenceCategory, ReferenceMatch } from './types.js';
 
 /** The `find_stations` input parameter each category's IDs feed (omitted where there's no direct filter). */
@@ -219,10 +220,18 @@ export class ReferenceDataService {
         if (entry.IsAccessKeyRequired) flags.push('access key required');
         return flags.length ? flags.join(', ') : undefined;
       }
-      case 'statustypes':
+      case 'statustypes': {
+        // Two statuses carry an operational flag their own title contradicts — say what the title
+        // means so a caller reading the list is not told a down station counts as operational.
+        const availability = statusAvailability(entry.ID);
+        if (availability === 'unavailable')
+          return 'flagged operational upstream, but currently unavailable';
+        if (availability === 'partial')
+          return 'flagged operational upstream, but only part of the site works';
         if (entry.IsOperational === true) return 'counts as operational';
         if (entry.IsOperational === false) return 'counts as non-operational';
         return 'operational state unknown';
+      }
       case 'levels':
         return entry.IsFastChargeCapable ? 'fast-charge capable' : undefined;
       case 'currenttypes':

@@ -40,6 +40,7 @@ export const stationResource = resource('openchargemap://station/{id}', {
     }
     const reliabilityNote = buildReliabilityNote({
       status: station.status,
+      statusTypeId: station.statusTypeId,
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: station.comments,

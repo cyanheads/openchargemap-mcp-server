@@ -19,6 +19,7 @@ import {
 import type { ServerConfig } from '@/config/server-config.js';
 import { getReferenceDataService } from '@/services/reference-data/reference-data-service.js';
 import type {
+  NormalizedComment,
   NormalizedConnection,
   NormalizedStation,
   NormalizedStationDetail,
@@ -297,6 +298,11 @@ export class OpenChargeMapService {
         : {}),
       ...(typeof poi.NumberOfPoints === 'number' ? { numberOfPoints: poi.NumberOfPoints } : {}),
       ...(status?.Title ? { status: status.Title } : {}),
+      ...(typeof status?.ID === 'number'
+        ? { statusTypeId: status.ID }
+        : typeof poi.StatusTypeID === 'number'
+          ? { statusTypeId: poi.StatusTypeID }
+          : {}),
       // IsOperational is ABSENT for Unknown (ID 0) — only set when the key is actually present.
       ...(typeof status?.IsOperational === 'boolean'
         ? { isOperational: status.IsOperational }
@@ -354,20 +360,28 @@ export class OpenChargeMapService {
     };
   }
 
-  /** Normalize and sort comments newest-first. */
-  private normalizeComments(raw: RawUserComment[]): {
-    user?: string;
-    commentType?: string;
-    comment?: string;
-    rating?: number | null;
-    dateCreated?: string;
-  }[] {
+  /**
+   * Normalize and sort comments newest-first. The check-in outcome is the charge-attempt result —
+   * it carries the meaning on records where OCM leaves `Comment` null — so its title, ID, and
+   * OCM's own positive/negative classification all come across.
+   */
+  private normalizeComments(raw: RawUserComment[]): NormalizedComment[] {
     return raw
       .map((c) => ({
         ...(c.UserName ? { user: c.UserName } : {}),
         ...(c.CommentType?.Title ? { commentType: c.CommentType.Title } : {}),
+        ...(c.CheckinStatusType?.Title ? { checkinStatus: c.CheckinStatusType.Title } : {}),
+        ...(typeof c.CheckinStatusType?.ID === 'number'
+          ? { checkinStatusId: c.CheckinStatusType.ID }
+          : typeof c.CheckinStatusTypeID === 'number'
+            ? { checkinStatusId: c.CheckinStatusTypeID }
+            : {}),
+        ...(typeof c.CheckinStatusType?.IsPositive === 'boolean'
+          ? { checkinStatusIsPositive: c.CheckinStatusType.IsPositive }
+          : {}),
         ...(c.Comment ? { comment: c.Comment } : {}),
         ...(c.Rating !== undefined ? { rating: c.Rating } : {}),
+        ...(c.RelatedURL ? { relatedUrl: c.RelatedURL } : {}),
         ...(c.DateCreated ? { dateCreated: c.DateCreated } : {}),
       }))
       .sort((a, b) => {

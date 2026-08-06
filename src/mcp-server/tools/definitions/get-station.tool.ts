@@ -8,7 +8,13 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
-import { CommentSchema, renderStationBlock, StationSchema } from './_station-schema.js';
+import {
+  CommentSchema,
+  renderComment,
+  renderStationBlock,
+  StationSchema,
+  visibleComments,
+} from './_station-schema.js';
 
 /** Detail station = the shared station shape plus detail-only fields. */
 const DetailStationSchema = StationSchema.extend({
@@ -119,6 +125,7 @@ export const getStation = tool('openchargemap_get_station', {
 
     const reliabilityNote = buildReliabilityNote({
       status: station.status,
+      statusTypeId: station.statusTypeId,
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: station.comments,
@@ -151,8 +158,18 @@ export const getStation = tool('openchargemap_get_station', {
       if (s.comments.length === 0) {
         lines.push('Comments: none on record');
       } else {
-        lines.push('Comments:');
-        for (const c of s.comments) lines.push(`  - ${renderComment(c)}`);
+        const { shown, omitted } = visibleComments(s.comments);
+        if (shown.length === 0) {
+          lines.push(
+            `Comments: ${s.comments.length} on record, none carrying text, a rating, or a check-in outcome`,
+          );
+        } else {
+          lines.push('Comments:');
+          for (const c of shown) lines.push(`  - ${renderComment(c)}`);
+          if (omitted > 0) {
+            lines.push(`  (${omitted} not listed — no text, rating, or check-in outcome)`);
+          }
+        }
       }
     }
 
@@ -161,14 +178,3 @@ export const getStation = tool('openchargemap_get_station', {
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });
-
-/** Render one comment line; shared shape with get_station_comments. */
-export function renderComment(c: z.infer<typeof CommentSchema>): string {
-  const date = c.dateCreated ? `[${c.dateCreated}] ` : '';
-  const user = c.user ?? 'anonymous';
-  const meta = [c.commentType, c.rating != null ? `★${c.rating}` : undefined]
-    .filter(Boolean)
-    .join(', ');
-  const tag = meta ? ` (${meta})` : '';
-  return `${date}${user}${tag}: ${c.comment ?? ''}`.trim();
-}

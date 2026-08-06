@@ -10,13 +10,17 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
-import { CommentSchema } from './_station-schema.js';
-import { renderComment } from './get-station.tool.js';
+import {
+  CommentSchema,
+  renderComment,
+  renderOperationalText,
+  visibleComments,
+} from './_station-schema.js';
 
 export const getStationComments = tool('openchargemap_get_station_comments', {
   title: 'openchargemap-mcp-server: get station comments',
   description:
-    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings and dates, alongside the station\'s current registry status and last-verified date, surfacing mismatches like "listed operational, but the last few check-ins report a fault."',
+    'Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings, dates, and the outcome the driver recorded ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), alongside the station\'s current registry status and last-verified date, surfacing mismatches like "listed operational, but the last few check-ins report a fault."',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -37,6 +41,12 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       .string()
       .optional()
       .describe('Current registry operational status (operator-reported).'),
+    registryStatusId: z
+      .number()
+      .optional()
+      .describe(
+        'Registry status ID — the value the openchargemap_find_stations statustypeid filter takes. Absent when OCM has no status on record.',
+      ),
     isOperational: z
       .boolean()
       .optional()
@@ -131,6 +141,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
 
     const reliabilityNote = buildReliabilityNote({
       status: station.status,
+      statusTypeId: station.statusTypeId,
       isOperational: station.isOperational,
       dateLastVerified: station.dateLastVerified,
       comments: allComments,
@@ -141,6 +152,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       stationId: station.id,
       stationTitle: station.title,
       ...(station.status ? { registryStatus: station.status } : {}),
+      ...(station.statusTypeId !== undefined ? { registryStatusId: station.statusTypeId } : {}),
       ...(station.isOperational !== undefined ? { isOperational: station.isOperational } : {}),
       ...(station.dateLastVerified !== undefined
         ? { dateLastVerified: station.dateLastVerified }
@@ -152,18 +164,15 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
   },
 
   format: (result) => {
-    const opText =
-      result.isOperational === true
-        ? 'operational'
-        : result.isOperational === false
-          ? 'NOT operational'
-          : 'operational state unknown';
+    const statusId =
+      result.registryStatusId != null ? ` (status id ${result.registryStatusId})` : '';
+    const opText = renderOperationalText(result.registryStatusId, result.isOperational);
     const verified = result.dateLastVerified
       ? `last verified ${result.dateLastVerified}`
       : 'never verified';
     const lines = [
       `**${result.stationTitle}** (id ${result.stationId})`,
-      `Registry status: ${result.registryStatus ?? 'Unknown'} (${opText}) · ${verified}`,
+      `Registry status: ${result.registryStatus ?? 'Unknown'}${statusId} — ${opText} · ${verified}`,
       '',
     ];
 
@@ -172,8 +181,18 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
         'No community check-ins on record — absence of reports is not evidence the charger works.',
       );
     } else {
-      lines.push(`${result.comments.length} comment(s), newest first:`);
-      for (const c of result.comments) lines.push(`- ${renderComment(c)}`);
+      const { shown, omitted } = visibleComments(result.comments);
+      if (shown.length === 0) {
+        lines.push(
+          `${result.comments.length} comment(s), none carrying text, a rating, or a check-in outcome.`,
+        );
+      } else {
+        lines.push(`${result.comments.length} comment(s), newest first:`);
+        for (const c of shown) lines.push(`- ${renderComment(c)}`);
+        if (omitted > 0) {
+          lines.push(`(${omitted} not listed — no text, rating, or check-in outcome)`);
+        }
+      }
     }
 
     if (result.reliabilityNote) lines.push('', `⚠️ Reliability: ${result.reliabilityNote}`);

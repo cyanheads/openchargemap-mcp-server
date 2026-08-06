@@ -106,14 +106,27 @@ export interface RawMediaItem {
   ItemURL?: string | null;
 }
 
+/**
+ * Raw OCM check-in outcome attached to a user comment — an 18-entry controlled vocabulary.
+ * `IsPositive` is OCM's own classification of the outcome; it is null for "Did Not Visit Location".
+ */
+export interface RawCheckinStatusType {
+  ID?: number;
+  IsPositive?: boolean | null;
+  Title?: string | null;
+}
+
 /** Raw OCM user comment. */
 export interface RawUserComment {
+  CheckinStatusType?: RawCheckinStatusType | null;
+  CheckinStatusTypeID?: number | null;
   Comment?: string | null;
   CommentType?: { ID?: number; Title?: string | null } | null;
   CommentTypeID?: number | null;
   DateCreated?: string | null;
   ID?: number;
   Rating?: number | null;
+  RelatedURL?: string | null;
   UserName?: string | null;
 }
 
@@ -171,12 +184,22 @@ export interface NormalizedConnection {
   voltage?: number | null;
 }
 
-/** Normalized community comment. */
+/**
+ * Normalized community comment. `checkinStatusIsPositive` carries OCM's own classification of the
+ * outcome. It reaches the tool schemas as well as the reliability layer, because the titles do not
+ * all read the way OCM scores them — "Charging Spot In Use (Other EV Parked)" is positive,
+ * "Charging Spot In Use (Non-EV Parked)" is not — and no tool publishes the check-in vocabulary a
+ * client could look the polarity up in.
+ */
 export interface NormalizedComment {
+  checkinStatus?: string;
+  checkinStatusId?: number;
+  checkinStatusIsPositive?: boolean;
   comment?: string;
   commentType?: string;
   dateCreated?: string;
   rating?: number | null;
+  relatedUrl?: string;
   user?: string;
 }
 
@@ -198,6 +221,7 @@ export interface NormalizedStation {
   operator?: string;
   operatorId?: number;
   status?: string;
+  statusTypeId?: number;
   title: string;
   usageType?: string;
   uuid: string;

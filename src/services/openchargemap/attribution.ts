@@ -1,7 +1,8 @@
 /**
- * @fileoverview Shared Open Charge Map attribution string and the reliability-note helper —
- * plain-prose caveats derived from observable facts (verification age, operational flag, placeholder
- * 0,0 coordinates, fault-vs-positive comment counts). No synthetic score (per the no-fabricated-signal rule).
+ * @fileoverview Shared Open Charge Map attribution string, the status-availability classifier, and
+ * the reliability-note helper — plain-prose caveats derived from observable facts (verification age,
+ * operational flag, status availability, placeholder 0,0 coordinates, fault-vs-positive check-in
+ * counts). No synthetic score (per the no-fabricated-signal rule).
  * @module services/openchargemap/attribution
  */
 
@@ -14,6 +15,25 @@ export const ATTRIBUTION =
 /** Months past which a listing's last-verified date is treated as a staleness caveat. */
 const STALE_MONTHS = 12;
 
+/** Status ID whose title says the station is down while OCM still flags it operational. */
+const STATUS_TEMPORARILY_UNAVAILABLE = 30;
+
+/** Status ID for a site where only some equipment works; OCM also flags this one operational. */
+const STATUS_PARTLY_OPERATIONAL = 75;
+
+/**
+ * How usable a registry status says the station is right now, independent of OCM's `IsOperational`
+ * boolean. Only the two statuses whose title contradicts that boolean are classified; every other
+ * status agrees with the flag and returns undefined so the flag speaks for itself.
+ */
+export function statusAvailability(
+  statusTypeId: number | undefined,
+): 'unavailable' | 'partial' | undefined {
+  if (statusTypeId === STATUS_TEMPORARILY_UNAVAILABLE) return 'unavailable';
+  if (statusTypeId === STATUS_PARTLY_OPERATIONAL) return 'partial';
+  return;
+}
+
 /** Whole months between an ISO date and now; null when the date is missing/unparseable. */
 function monthsSince(dateLastVerified: string | null | undefined): number | null {
   if (!dateLastVerified) return null;
@@ -23,8 +43,18 @@ function monthsSince(dateLastVerified: string | null | undefined): number | null
   return Math.floor((Date.now() - then) / msPerMonth);
 }
 
-/** True when a comment's type reads as a fault/problem report. */
-function isFaultComment(c: NormalizedComment): boolean {
+/**
+ * True when a comment reports a bad visit. The check-in outcome is the primary signal — OCM marks
+ * all but one of its 18 outcomes positive or negative ("Did Not Visit Location" carries no verdict),
+ * and a failed charge is routinely filed under the "General Comment" type. A fault-report comment
+ * type still counts on its own, since it flags a problem even when the visitor recorded a positive
+ * or no check-in. Shared with the comment renderers so a row this counts is never left unlisted.
+ */
+export function isFaultComment(c: {
+  commentType?: string | undefined;
+  checkinStatusIsPositive?: boolean | undefined;
+}): boolean {
+  if (c.checkinStatusIsPositive === false) return true;
   const t = c.commentType?.toLowerCase() ?? '';
   return t.includes('fault') || t.includes('problem') || t.includes('issue');
 }
@@ -35,6 +65,7 @@ function isFaultComment(c: NormalizedComment): boolean {
  */
 export function buildReliabilityNote(input: {
   status: string | undefined;
+  statusTypeId?: number | undefined;
   isOperational: boolean | undefined;
   dateLastVerified: string | null | undefined;
   comments: NormalizedComment[] | undefined;
@@ -52,16 +83,29 @@ export function buildReliabilityNote(input: {
   const months = monthsSince(input.dateLastVerified);
   const stale = months !== null && months >= STALE_MONTHS;
 
-  if (input.isOperational === false) {
+  // Availability comes first: OCM flags both of these statuses operational, so the flag alone
+  // would read as all-clear on a station the operator has said is down or only partly working.
+  const availability = statusAvailability(input.statusTypeId);
+  if (availability === 'unavailable') {
+    parts.push(
+      `Registry status is "${input.status ?? 'Temporarily Unavailable'}" — the station is not usable right now.`,
+    );
+  } else if (availability === 'partial') {
+    parts.push(
+      `Registry status is "${input.status ?? 'Partly Operational (Mixed)'}" — only some equipment here is working.`,
+    );
+  } else if (input.isOperational === false) {
     parts.push(`Registry status is "${input.status ?? 'non-operational'}" (not operational).`);
   } else if (input.isOperational === undefined && input.status) {
     parts.push(`Registry operational state is unknown (status "${input.status}").`);
   }
 
   if (stale) {
-    parts.push(
-      `Last verified ${months} months ago${input.isOperational === true ? ', so the "operational" flag may be out of date' : ''}.`,
-    );
+    const flagCaveat =
+      input.isOperational === true && !availability
+        ? ', so the "operational" flag may be out of date'
+        : '';
+    parts.push(`Last verified ${months} months ago${flagCaveat}.`);
   } else if (months === null) {
     parts.push('Listing has never been verified.');
   }
@@ -69,7 +113,9 @@ export function buildReliabilityNote(input: {
   if (input.comments && input.comments.length > 0) {
     const faults = input.comments.filter(isFaultComment).length;
     if (faults > 0) {
-      parts.push(`${faults} of ${input.comments.length} recent comment(s) report a fault.`);
+      parts.push(
+        `${faults} of ${input.comments.length} recent comment(s) report a fault or a failed visit.`,
+      );
     }
   }
 
