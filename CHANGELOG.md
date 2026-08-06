@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-08-06
+
+Offset pagination on capped list outputs, fixed find_stations cap accounting, and reference-data source disclosure
+
 ## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-08-06
 
 Error-path accuracy fixes, stricter input validation, and malformed-response handling
