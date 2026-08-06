@@ -158,10 +158,40 @@ describe('openchargemap_find_stations', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/14
-  it.skip('rejects empty ID filter arrays instead of silently disabling the filter', () => {
-    expect(() =>
-      findStations.input.parse({ latitude: 47, longitude: -122, levelid: [] }),
-    ).toThrow();
+  // Every ID filter is built by the same idFilter() factory, so all five are covered.
+  it.each(['connectiontypeid', 'operatorid', 'usagetypeid', 'levelid', 'statustypeid'])(
+    'rejects an empty %s array instead of silently disabling the filter',
+    (field) => {
+      expect(() =>
+        findStations.input.parse({ latitude: 47, longitude: -122, [field]: [] }),
+      ).toThrow();
+    },
+  );
+
+  it.each(['connectiontypeid', 'operatorid', 'usagetypeid', 'levelid', 'statustypeid'])(
+    'still accepts a single-element %s array and a bare scalar',
+    (field) => {
+      expect(
+        findStations.input.safeParse({ latitude: 47, longitude: -122, [field]: [1] }).success,
+      ).toBe(true);
+      expect(
+        findStations.input.safeParse({ latitude: 47, longitude: -122, [field]: 1 }).success,
+      ).toBe(true);
+    },
+  );
+
+  it('still treats an omitted ID filter as no filter at all', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    await findStations.handler(findStations.input.parse({ latitude: 47, longitude: -122 }), ctx());
+    const url = String(fetchWithTimeout.mock.calls[0]![0]);
+    for (const field of [
+      'connectiontypeid',
+      'operatorid',
+      'usagetypeid',
+      'levelid',
+      'statustypeid',
+    ])
+      expect(url).not.toContain(field);
   });
 
   it('joins array filters as comma-separated OR lists', async () => {
@@ -423,7 +453,7 @@ describe('openchargemap_find_stations', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
-  it.skip('names whether both location modes or neither were supplied', async () => {
+  it('names whether both location modes or neither were supplied', async () => {
     const neither = findStations
       .handler(findStations.input.parse({}), ctx())
       .catch((error) => error);
@@ -443,7 +473,28 @@ describe('openchargemap_find_stations', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
-  it.skip('documents both HTTP 401 and 403 in the auth_failed contract', () => {
+  // A half-supplied center used to report that no location was given at all.
+  it.each([
+    ['latitude only', { latitude: 47 }, /longitude is missing/i, /latitude is missing/i],
+    ['longitude only', { longitude: -122 }, /latitude is missing/i, /longitude is missing/i],
+  ])(
+    'names the missing coordinate when only %s is supplied',
+    async (_label, input, named, absent) => {
+      const error = await findStations
+        .handler(findStations.input.parse(input), ctx())
+        .catch((thrown) => thrown);
+
+      expect(error).toMatchObject({ data: { reason: 'invalid_location' } });
+      expect(error.message).toMatch(named);
+      expect(error.message).not.toMatch(absent);
+      // The old generic text claimed nothing was provided, which was wrong here.
+      expect(error.message).not.toMatch(/neither/i);
+    },
+  );
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
+  // The sibling tools carry the same contract entry; the smoke suite asserts all three together.
+  it('documents both HTTP 401 and 403 in the auth_failed contract', () => {
     const auth = findStations.errors?.find((entry) => entry.reason === 'auth_failed');
     expect(auth?.when).toContain('401');
     expect(auth?.when).toContain('403');

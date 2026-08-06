@@ -100,7 +100,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
     {
       reason: 'auth_failed',
       code: JsonRpcErrorCode.Unauthorized,
-      when: 'OCM returned HTTP 403 — the API key is missing or invalid.',
+      when: 'OCM returned HTTP 401 or 403 — the API key is missing or invalid.',
       recovery:
         'Set a valid OPENCHARGEMAP_API_KEY (free signup at openchargemap.org). This is a server configuration issue, not an input error.',
     },

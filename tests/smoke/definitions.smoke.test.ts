@@ -43,6 +43,18 @@ describe('definition smoke checks', () => {
     ).toBe(true);
   });
 
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
+  // The service re-tags both 401 and 403 as auth_failed, so every tool that can hit the OCM HTTP
+  // boundary must say so — the same stale string previously lived in all three files.
+  it.each([findStations, getStation, getStationComments])(
+    'documents both HTTP 401 and 403 in $name auth_failed contract',
+    (definition) => {
+      const auth = definition.errors?.find((entry) => entry.reason === 'auth_failed');
+      expect(auth?.when).toContain('401');
+      expect(auth?.when).toContain('403');
+    },
+  );
+
   it('exposes the station resource with numeric-id params and a handler', () => {
     expect(stationResource.name).toBe('openchargemap-station');
     expect(stationResource.params.safeParse({ id: '145452' }).success).toBe(true);

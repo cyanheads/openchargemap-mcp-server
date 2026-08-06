@@ -36,8 +36,27 @@ describe('openchargemap_lookup_reference', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/13
-  it.skip('rejects a whitespace-only query instead of silently entering browse mode', () => {
-    expect(() => lookupReference.input.parse({ category: 'operators', query: '   ' })).toThrow();
+  it.each(['   ', '\t', '\n', ' \t\n '])(
+    'rejects the whitespace-only query %j instead of silently entering browse mode',
+    (query) => {
+      expect(() => lookupReference.input.parse({ category: 'operators', query })).toThrow();
+    },
+  );
+
+  // The narrowed gate must not reach past whitespace-only: a padded real term still resolves, and
+  // an omitted query is still the documented way to browse.
+  it('still accepts a query padded with whitespace around real characters', () => {
+    expect(
+      lookupReference.input.safeParse({ category: 'operators', query: '  ChargePoint  ' }).success,
+    ).toBe(true);
+  });
+
+  it('still browses when the query is omitted entirely', async () => {
+    const result = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', limit: 3 }),
+      ctx(),
+    );
+    expect(result.matches).toHaveLength(3);
   });
 
   it('resolves "CCS" to connectiontypeid 33 (CCS Type 2) first (headline goal)', async () => {
@@ -108,9 +127,18 @@ describe('openchargemap_lookup_reference', () => {
       c,
     );
     expect(result.matches).toHaveLength(5);
-    const enrichment = getEnrichment(c) as { truncated?: boolean; totalCount?: number };
+    const enrichment = getEnrichment(c) as {
+      truncated?: boolean;
+      totalCount?: number;
+      notice?: string;
+    };
     expect(enrichment.truncated).toBe(true);
     expect(enrichment.totalCount).toBeGreaterThan(5);
+    // enrich.truncated() routes its guidance through `notice`, and the effective-output parse
+    // strips any enrichment key the block does not declare — so the declaration is what keeps the
+    // "raise limit / pass a query" path on the wire, not the write.
+    expect(enrichment.notice).toMatch(/raise limit/i);
+    expect(lookupReference.enrichment).toHaveProperty('notice');
   });
 
   it('surfaces statustypes operational detail and snapshotDate', async () => {
@@ -166,7 +194,7 @@ describe('openchargemap_lookup_reference', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
-  it.skip('does not write unreachable enrichment immediately before no_match', () => {
+  it('does not write unreachable enrichment immediately before no_match', () => {
     const c = ctx();
     expect(() =>
       lookupReference.handler(

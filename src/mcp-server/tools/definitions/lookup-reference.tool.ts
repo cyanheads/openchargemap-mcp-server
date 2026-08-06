@@ -33,7 +33,7 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
       ),
     query: z
       .string()
-      .min(1)
+      .regex(/\S/, 'query must contain at least one non-whitespace character')
       .optional()
       .describe(
         'Name, title, code, or alias to resolve (e.g. "CCS", "CHAdeMO", "Tesla", "Public", "France", "FR"). Case-insensitive, matches on title, formal name, and known aliases. Omit to browse the entire category.',
@@ -101,7 +101,10 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
     truncated: z.boolean().optional().describe('True when a browse was capped at limit.'),
     shown: z.number().optional().describe('Number of entries returned when the cap was hit.'),
     cap: z.number().optional().describe('The limit that was applied.'),
-    notice: z.string().optional().describe('Guidance when a query matched nothing.'),
+    notice: z
+      .string()
+      .optional()
+      .describe('How to reach the entries beyond the cap when a browse was capped.'),
   },
 
   errors: [
@@ -119,12 +122,9 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
     const category = input.category as ReferenceCategory;
     const filterParam = ref.filterParam(category);
 
-    if (input.query !== undefined && input.query.trim().length > 0) {
+    if (input.query !== undefined) {
       const matches = ref.resolve(category, input.query, input.limit);
       if (matches.length === 0) {
-        ctx.enrich.notice(
-          `No ${category} entry matched "${input.query}". Omit the query to browse the whole category and pick an id.`,
-        );
         throw ctx.fail('no_match', `No ${category} entry matched "${input.query}".`, {
           ...ctx.recoveryFor('no_match'),
         });

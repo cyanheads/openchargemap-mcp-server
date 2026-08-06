@@ -12,14 +12,19 @@ import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-
 import type { SearchPoiParams } from '@/services/openchargemap/types.js';
 import { renderStationBlock, StationSchema } from './_station-schema.js';
 
-/** Connector/operator/usage/level/status filter: a single positive int ID or an array (OR-matched). */
+/**
+ * Connector/operator/usage/level/status filter: a single positive int ID or an array (OR-matched).
+ * The array must be non-empty — an empty one carries no filter and would widen the search instead
+ * of narrowing it, so omitting the field is the only way to express "no filter".
+ */
 const idFilter = (max: number) =>
   z.union([
     z.number().int().positive().describe('A single reference ID.'),
     z
       .array(z.number().int().positive().describe('A reference ID.'))
+      .min(1)
       .max(max)
-      .describe('Several reference IDs, OR-matched.'),
+      .describe('Several reference IDs, OR-matched. At least one.'),
   ]);
 
 /** Input schema, extracted so the search-summary helper can reference its inferred type. */
@@ -178,17 +183,21 @@ export const findStations = tool('openchargemap_find_stations', {
     {
       reason: 'auth_failed',
       code: JsonRpcErrorCode.Unauthorized,
-      when: 'OCM returned HTTP 403 — the API key is missing or invalid.',
+      when: 'OCM returned HTTP 401 or 403 — the API key is missing or invalid.',
       recovery:
         'Set a valid OPENCHARGEMAP_API_KEY (free signup at openchargemap.org). This is a server configuration issue, not an input error.',
     },
   ],
 
   async handler(input, ctx) {
-    const hasRadius = input.latitude !== undefined && input.longitude !== undefined;
+    const hasLatitude = input.latitude !== undefined;
+    const hasLongitude = input.longitude !== undefined;
+    const hasRadius = hasLatitude && hasLongitude;
     const hasBbox = input.boundingbox !== undefined;
     if (hasRadius === hasBbox) {
-      throw ctx.fail('invalid_location', undefined, { ...ctx.recoveryFor('invalid_location') });
+      throw ctx.fail('invalid_location', locationFailure({ hasLatitude, hasLongitude, hasBbox }), {
+        ...ctx.recoveryFor('invalid_location'),
+      });
     }
 
     const params: SearchPoiParams = {
@@ -244,6 +253,28 @@ export const findStations = tool('openchargemap_find_stations', {
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });
+
+/**
+ * Name the specific location problem the caller hit. Reached only when exactly one search mode was
+ * not supplied, so a bounding box present here means a center was supplied alongside it, and its
+ * absence means at most one of latitude/longitude arrived.
+ */
+function locationFailure(supplied: {
+  hasLatitude: boolean;
+  hasLongitude: boolean;
+  hasBbox: boolean;
+}): string {
+  if (supplied.hasBbox) {
+    return 'Both a center (latitude + longitude) and a boundingbox were supplied — provide exactly one, not both.';
+  }
+  if (supplied.hasLatitude) {
+    return 'Longitude is missing — a center search needs latitude and longitude together.';
+  }
+  if (supplied.hasLongitude) {
+    return 'Latitude is missing — a center search needs latitude and longitude together.';
+  }
+  return 'No search area was provided — supply either a center (latitude + longitude) or a boundingbox.';
+}
 
 /** Compose a human-readable echo of the resolved search and active filters. */
 function buildSearchSummary(input: z.infer<typeof FindStationsInput>, hasBbox: boolean): string {
