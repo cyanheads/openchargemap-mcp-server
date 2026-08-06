@@ -6,7 +6,7 @@
  */
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RawPoi } from '@/services/openchargemap/types.js';
 
@@ -97,6 +97,73 @@ describe('openchargemap_find_stations', () => {
     expect(decodeURIComponent(String(url))).toContain('boundingbox=(47.5,-122.5),(47.7,-122.2)');
   });
 
+  it('accepts pole and antimeridian coordinate boundaries', async () => {
+    for (const [latitude, longitude] of [
+      [90, 180],
+      [-90, -180],
+      [0, 180],
+    ] as const) {
+      fetchWithTimeout.mockResolvedValueOnce(jsonResponse([FULL_POI]));
+      await expect(
+        findStations.handler(findStations.input.parse({ latitude, longitude }), ctx()),
+      ).resolves.toEqual(expect.schemaMatching(findStations.output));
+    }
+  });
+
+  it('preserves an antimeridian-crossing bounding box at the API boundary', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    await findStations.handler(
+      findStations.input.parse({
+        boundingbox: { sw_lat: -10, sw_lng: 170, ne_lat: 10, ne_lng: -170 },
+      }),
+      ctx(),
+    );
+
+    const url = decodeURIComponent(String(fetchWithTimeout.mock.calls[0]![0]));
+    expect(url).toContain('boundingbox=(-10,170),(10,-170)');
+  });
+
+  it('accepts the maximum 500-unit radius', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    await findStations.handler(
+      findStations.input.parse({ latitude: 90, longitude: 180, distance: 500 }),
+      ctx(),
+    );
+
+    expect(String(fetchWithTimeout.mock.calls[0]![0])).toContain('distance=500');
+  });
+
+  it.each([
+    ['latitude below minimum', { latitude: -90.000_001, longitude: 0 }],
+    ['latitude above maximum', { latitude: 90.000_001, longitude: 0 }],
+    ['longitude below minimum', { latitude: 0, longitude: -180.000_001 }],
+    ['longitude above maximum', { latitude: 0, longitude: 180.000_001 }],
+    ['zero radius', { latitude: 0, longitude: 0, distance: 0 }],
+    ['negative radius', { latitude: 0, longitude: 0, distance: -1 }],
+    ['radius above maximum', { latitude: 0, longitude: 0, distance: 501 }],
+    ['enormous radius', { latitude: 0, longitude: 0, distance: Number.MAX_SAFE_INTEGER }],
+  ])('rejects %s at the Zod boundary', (_label, input) => {
+    expect(() => findStations.input.parse(input)).toThrow();
+  });
+
+  it.each([
+    ['connectiontypeid', 0],
+    ['operatorid', -1],
+    ['usagetypeid', 1.5],
+    ['statustypeid', Array.from({ length: 11 }, (_, index) => index + 1)],
+  ])('rejects invalid %s filters', (field, value) => {
+    expect(() =>
+      findStations.input.parse({ latitude: 47, longitude: -122, [field]: value }),
+    ).toThrow();
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/14
+  it.skip('rejects empty ID filter arrays instead of silently disabling the filter', () => {
+    expect(() =>
+      findStations.input.parse({ latitude: 47, longitude: -122, levelid: [] }),
+    ).toThrow();
+  });
+
   it('joins array filters as comma-separated OR lists', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
     await findStations.handler(
@@ -116,6 +183,21 @@ describe('openchargemap_find_stations', () => {
     expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 
+  it('throws invalid_location when only one center coordinate is present', async () => {
+    await expect(
+      findStations.handler(findStations.input.parse({ latitude: 47 }), ctx()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: { reason: 'invalid_location' },
+    });
+    await expect(
+      findStations.handler(findStations.input.parse({ longitude: -122 }), ctx()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: { reason: 'invalid_location' },
+    });
+  });
+
   it('throws invalid_location when BOTH radius and bbox are given', async () => {
     const input = findStations.input.parse({
       latitude: 47,
@@ -132,7 +214,7 @@ describe('openchargemap_find_stations', () => {
     const input = findStations.input.parse({ latitude: 47, longitude: -122, connectiontypeid: 33 });
     await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_stations' },
+      data: { reason: 'no_stations', recovery: { hint: expect.any(String) } },
     });
   });
 
@@ -264,6 +346,20 @@ describe('openchargemap_find_stations', () => {
     });
   });
 
+  it('maps a 401 to the complete auth_failed error envelope', async () => {
+    fetchWithTimeout.mockRejectedValue(new McpError(JsonRpcErrorCode.Unauthorized, 'HTTP 401'));
+    await expect(
+      findStations.handler(findStations.input.parse({ latitude: 47, longitude: -122 }), ctx()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.Unauthorized,
+      data: {
+        reason: 'auth_failed',
+        retryable: false,
+        recovery: { hint: expect.any(String) },
+      },
+    });
+  });
+
   it('maps a 5xx to upstream_unavailable (fetch mock throws)', async () => {
     fetchWithTimeout.mockRejectedValue(
       new McpError(JsonRpcErrorCode.ServiceUnavailable, 'HTTP 503'),
@@ -285,5 +381,89 @@ describe('openchargemap_find_stations', () => {
     expect(text).toContain('AMLI Mark24');
     expect(text).toContain('Temporarily Unavailable');
     expect(text).toContain('CC BY 4.0');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/4
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/10
+  it('carries explicit false flags and the availability wording into search results too', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const result = await findStations.handler(
+      findStations.input.parse({ latitude: 47.6685, longitude: -122.387 }),
+      ctx(),
+    );
+    const text = (findStations.format!(result)[0] as { text: string }).text;
+
+    expect(result.stations[0]).toMatchObject({
+      isPayAtLocation: false,
+      isRecentlyVerified: false,
+      statusTypeId: 30,
+      isOperational: true,
+    });
+    expect(text).toContain('pay at location: no');
+    expect(text).toContain('recently verified: no');
+    expect(text).not.toContain('Temporarily Unavailable (operational)');
+    expect(text).toContain('not usable right now');
+  });
+
+  it('returns output conforming to the declared schema and cap enrichment', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const c = ctx();
+    const result = await findStations.handler(
+      findStations.input.parse({ latitude: 47, longitude: -122, maxresults: 1 }),
+      c,
+    );
+
+    expect(result).toEqual(expect.schemaMatching(findStations.output));
+    expect(getEnrichment(c)).toMatchObject({
+      totalCount: 1,
+      truncated: true,
+      shown: 1,
+      cap: 1,
+    });
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
+  it.skip('names whether both location modes or neither were supplied', async () => {
+    const neither = findStations
+      .handler(findStations.input.parse({}), ctx())
+      .catch((error) => error);
+    const both = findStations
+      .handler(
+        findStations.input.parse({
+          latitude: 47,
+          longitude: -122,
+          boundingbox: { sw_lat: 46, sw_lng: -123, ne_lat: 48, ne_lng: -121 },
+        }),
+        ctx(),
+      )
+      .catch((error) => error);
+
+    await expect(neither).resolves.toMatchObject({ message: expect.stringMatching(/provide/i) });
+    await expect(both).resolves.toMatchObject({ message: expect.stringMatching(/not both/i) });
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
+  it.skip('documents both HTTP 401 and 403 in the auth_failed contract', () => {
+    const auth = findStations.errors?.find((entry) => entry.reason === 'auth_failed');
+    expect(auth?.when).toContain('401');
+    expect(auth?.when).toContain('403');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/8
+  it.skip('does not report no_stations when a capped page is emptied by local filters', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const c = ctx();
+    const result = await findStations.handler(
+      findStations.input.parse({
+        latitude: 47,
+        longitude: -122,
+        minchargepoints: 10,
+        maxresults: 1,
+      }),
+      c,
+    );
+
+    expect(result.stations).toEqual([]);
+    expect(getEnrichment(c)).toMatchObject({ truncated: true });
   });
 });

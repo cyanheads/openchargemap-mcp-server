@@ -1,6 +1,7 @@
 /**
  * @fileoverview Shared OCM POI fixtures for tool tests — a full station, a sparse station (omitted
- * upstream fields, absent StatusType key), and a station with comments.
+ * upstream fields, absent StatusType key), a station with comments, a partly-operational station,
+ * and a station whose entire comment list is information-free.
  * @module tests/fixtures/ocm
  */
 
@@ -69,6 +70,8 @@ export const FULL_POI_DETAIL: RawPoi = {
     {
       ID: 1,
       CommentType: { ID: 10, Title: 'General Comment' },
+      CheckinStatusTypeID: 10,
+      CheckinStatusType: { ID: 10, Title: 'Charged Successfully', IsPositive: true },
       UserName: 'evdriver1',
       Comment: 'Worked fine, two stalls open.',
       Rating: 5,
@@ -77,12 +80,52 @@ export const FULL_POI_DETAIL: RawPoi = {
     {
       ID: 2,
       CommentType: { ID: 30, Title: 'Fault Report' },
+      CheckinStatusTypeID: 20,
+      CheckinStatusType: {
+        ID: 20,
+        Title: 'Failed to Charge (Equipment Not Operational)',
+        IsPositive: false,
+      },
       UserName: 'evdriver2',
       Comment: 'Connector 1 would not start a session.',
       Rating: 2,
+      RelatedURL: 'https://example.com/outage',
       DateCreated: '2025-06-01T10:00:00Z',
     },
   ],
+};
+
+/**
+ * A station whose whole comment list carries no information — OCM stores runs of check-ins with a
+ * null Comment, null Rating, and no CheckinStatusType (verified on real records).
+ */
+export const BLANK_COMMENTS_POI: RawPoi = {
+  ...FULL_POI,
+  ID: 71749,
+  StatusTypeID: 50,
+  StatusType: { ID: 50, Title: 'Operational', IsOperational: true },
+  UserComments: [1, 2, 3].map((n) => ({
+    ID: n,
+    CommentType: { ID: 10, Title: 'General Comment' },
+    CheckinStatusTypeID: null,
+    CheckinStatusType: null,
+    UserName: 'corscheg',
+    Comment: null,
+    Rating: null,
+    DateCreated: `2024-0${n}-01T00:00:00Z`,
+  })),
+};
+
+/**
+ * A partly-operational station (StatusType 75) — OCM flags it operational, but only some of the
+ * equipment on site works.
+ */
+export const PARTLY_OPERATIONAL_POI: RawPoi = {
+  ...FULL_POI,
+  ID: 300001,
+  StatusTypeID: 75,
+  StatusType: { ID: 75, Title: 'Partly Operational (Mixed)', IsOperational: true },
+  DateLastVerified: '2026-08-01T00:00:00Z',
 };
 
 /**
