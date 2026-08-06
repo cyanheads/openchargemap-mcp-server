@@ -52,9 +52,9 @@ beforeEach(async () => {
     if (params.get('chargepointid') === String(MISSING_STATION_ID)) {
       return Promise.resolve(jsonResponse([]));
     }
-    return Promise.resolve(
-      jsonResponse(params.get('verbose') === 'true' ? [FULL_POI_DETAIL] : [FULL_POI]),
-    );
+    if (params.get('verbose') === 'true') return Promise.resolve(jsonResponse([FULL_POI_DETAIL]));
+    // Two search results, so a maxresults-1 call exercises the truncation/continuation envelope.
+    return Promise.resolve(jsonResponse([FULL_POI, { ...FULL_POI, ID: 145_453 }]));
   });
   await initReferenceDataService(serverConfig);
   initOpenChargeMapService(serverConfig);
@@ -75,11 +75,67 @@ toolContractSuite(findStations, {
         });
       },
     },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+      name: 'carries continuation metadata on both surfaces when a page is truncated',
+      input: { latitude: 47.6062, longitude: -122.3321, maxresults: 1 },
+      assert: (result) => {
+        expect(result.structuredContent).toMatchObject({
+          totalCount: 2,
+          truncated: true,
+          shown: 1,
+          cap: 1,
+          nextOffset: 1,
+          notice: expect.stringContaining('offset 1'),
+        });
+        // The enrichment trailer mirrors the notice into content[] for format()-only clients, and
+        // names what totalCount counts — the framework's default renders a bare "N total", which
+        // reads as a registry-wide match total this tool cannot know.
+        expect(result.content?.at(-1)).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining('offset 1'),
+        });
+        expect(result.content?.at(-1)?.text).toContain('2 matching stations retrieved');
+        expect(result.content?.at(-1)?.text).not.toContain('**2 total**');
+      },
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+      name: 'returns the second page for the reported offset',
+      input: { latitude: 47.6062, longitude: -122.3321, maxresults: 1, offset: 1 },
+      assert: (result) => {
+        const structured = result.structuredContent as { stations: { id: number }[] };
+        expect(structured.stations.map((s) => s.id)).toEqual([145_453]);
+        expect(result.structuredContent).not.toHaveProperty('nextOffset');
+      },
+    },
   ],
   errors: [
     {
       name: 'rejects a search with neither a center nor a bounding box',
       input: { maxresults: 5 },
+      code: JsonRpcErrorCode.InvalidParams,
+      reason: 'invalid_location',
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/17
+      name: 'rejects a bounding box carrying a stray latitude rather than dropping it',
+      input: {
+        latitude: 47.6062,
+        boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
+        maxresults: 2,
+      },
+      code: JsonRpcErrorCode.InvalidParams,
+      reason: 'invalid_location',
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/17
+      name: 'rejects a bounding box carrying a stray longitude rather than dropping it',
+      input: {
+        longitude: -122.3321,
+        boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
+        maxresults: 2,
+      },
       code: JsonRpcErrorCode.InvalidParams,
       reason: 'invalid_location',
     },
@@ -115,7 +171,7 @@ toolContractSuite(getStationComments, {
   success: [
     {
       name: 'returns a schema-valid envelope for station check-ins',
-      input: { id: FULL_POI.ID, maxresults: 5 },
+      input: { id: FULL_POI.ID, maxresults: 5, offset: 0 },
       assert: (result) => {
         const structured = result.structuredContent as {
           comments: Record<string, unknown>[];
@@ -136,6 +192,18 @@ toolContractSuite(getStationComments, {
         });
       },
     },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
+      name: 'renders the page count against the station total when a page is capped',
+      input: { id: FULL_POI.ID, maxresults: 1 },
+      assert: (result) => {
+        expect(result.structuredContent).toMatchObject({ totalComments: 2, totalCount: 2 });
+        expect(result.content?.[0]).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining('1 of 2 comment(s), newest first:'),
+        });
+      },
+    },
   ],
   errors: [
     {
@@ -153,6 +221,33 @@ toolContractSuite(lookupReference, {
     {
       name: 'returns a schema-valid envelope for a connector lookup',
       input: { category: 'connectiontypes', query: 'CCS' },
+      assert: (result) => {
+        // https://github.com/cyanheads/openchargemap-mcp-server/issues/11
+        // This suite runs with referenceRefresh off, so the vintage on the wire is the bundle's.
+        expect(result.structuredContent).toMatchObject({ source: 'bundled' });
+        expect(result.content?.[0]).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining('Reference data: bundled (captured '),
+        });
+      },
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
+      name: 'carries browse continuation metadata on both surfaces',
+      input: { category: 'operators', limit: 5 },
+      assert: (result) => {
+        expect(result.structuredContent).toMatchObject({
+          truncated: true,
+          shown: 5,
+          cap: 5,
+          nextOffset: 5,
+          notice: expect.stringContaining('offset 5'),
+        });
+        expect(result.content?.at(-1)).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining('offset 5'),
+        });
+      },
     },
   ],
   errors: [
