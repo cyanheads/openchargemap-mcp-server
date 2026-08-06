@@ -6,7 +6,9 @@
       "typescript",
       "tsc-alias",
       "depcheck",
-      "@cyanheads/mcp-ts-core"
+      "@cyanheads/mcp-ts-core",
+      "@socketsecurity/bun-security-scanner",
+      "@vitest/coverage-istanbul"
     ],
     "ignorePatterns": []
   },
