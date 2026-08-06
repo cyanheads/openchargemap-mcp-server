@@ -42,12 +42,13 @@ Four tools across the find-and-detail surface — search, detail, offline ID res
 
 The workhorse. Search the global registry by location, then narrow with filters.
 
-- Radius search (`latitude` + `longitude` + `distance`, in `KM` or `Miles`) or `boundingbox` — exactly one mode per call
+- Radius search (`latitude` + `longitude` + `distance`, in `KM` or `Miles`) or `boundingbox` — exactly one mode per call. A `boundingbox` sent alongside a `latitude` or a `longitude` is rejected rather than searched with the coordinate quietly dropped
 - Optional country scope via ISO 3166-1 alpha-2 `countrycode`; global by default, no implicit country
 - Filters: connector type, minimum power (kW), operator/network, usage type, charge level, operational status, minimum charge points — all integer IDs, single or OR-matched arrays
 - Resolve a connector or network name to its filter ID with `openchargemap_lookup_reference` first (e.g. `"CCS"` → `33`)
 - Each result carries title, address, distance, connections (type/power/current/count), operator, access rules, registry status, and `dateLastVerified`
-- `maxresults` caps the set (default 25, max 200), ordered by distance; truncation is disclosed when the cap is hit
+- `maxresults` caps the page (default 25, max 200), ordered by distance. A truncated page reports `nextOffset`; pass it back as `offset` for the next page. OCM has no offset parameter of its own, so paging runs over an over-fetched candidate page — reachable depth is 500 stations per search (`offset` 0–499), and `totalCount` is what the search retrieved rather than a registry-wide total (OCM publishes none). It is exact only when the candidate page came back short of its cap; otherwise it is a floor, and the notice says so
+- Local filters (`minchargepoints`, and the drop of OCM's 0,0 coordinate sentinels) run over that whole candidate page, so a match ranked past `maxresults` is not lost and a page emptied by filtering is reported as truncated, not as "no stations"
 - **Coordinate-native — does not geocode place names.** Resolve a place like "Ballard, Seattle" to coordinates with a geocoding server (e.g. the `openstreetmap` MCP server's `openstreetmap_geocode`) first, then pass them here
 
 ---
@@ -72,9 +73,9 @@ Resolve Open Charge Map reference data to the integer IDs the `find_stations` fi
 
 - Categories: `connectiontypes`, `operators`, `usagetypes`, `statustypes`, `currenttypes`, `levels`, `countries`
 - Pass a `query` to resolve a name, title, code, or alias (`"CCS"`, `"Tesla Supercharger"`, `"ChargePoint"`, `"Public - Pay At Location"`, `"France"`, `"FR"`) — case-insensitive, matched on title, formal name, and curated connector aliases
-- Omit the `query` to browse the whole category (up to `limit`, max 100)
-- Returns the matching `id`(s) plus the `filterParam` they feed and the snapshot vintage (`snapshotDate`)
-- An optional startup refresh keeps the snapshot from drifting — see `OPENCHARGEMAP_REFERENCE_REFRESH` below
+- Omit the `query` to browse the whole category (up to `limit`, max 100). Browsing and querying both page: `totalCount` is the full match count, and a truncated page reports `nextOffset` to pass back as `offset` — every entry in a large category like `operators` (974) or `countries` (250) is reachable
+- Returns the matching `id`(s) plus the `filterParam` they feed and the vintage of the data actually served — `snapshotDate` with a `source` of `live` or `bundled`, so a fresh fetch is never mistaken for a freshly cut bundle
+- An optional startup refresh keeps the snapshot from drifting — see `OPENCHARGEMAP_REFERENCE_REFRESH` below. When it succeeds, `source` is `live` and `snapshotDate` is the day it ran; when it is off or it failed, `source` is `bundled` and the date is the bundle's own
 
 ---
 
@@ -82,7 +83,9 @@ Resolve Open Charge Map reference data to the integer IDs the `find_stations` fi
 
 Community check-ins for one station — the honest reliability signal beyond the operator-reported registry flag.
 
-- Returns user comments and fault reports with ratings, dates, and the recorded check-in outcome ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), newest first (`maxresults` caps, max 100)
+- Returns user comments and fault reports with ratings, dates, and the recorded check-in outcome ("Charged Successfully", "Failed to Charge (Equipment Not Operational)", …), newest first (`maxresults` caps the page, max 100)
+- One POI fetch carries every comment the station has, so `totalCount` is exact and `offset` (paired with the `nextOffset` a truncated page reports) reads the rest without a further upstream call
+- Every count states its population: `totalComments` is the station's whole set, the rendered header reads `2 of 6 comment(s)` when a page is only part of it, and `reliabilityNote`'s fault ratio is counted over the whole set so it does not move with `maxresults`
 - The check-in outcome is the charge-attempt result and drives fault detection — a failed charge counts even when it was filed as a plain comment
 - Surfaces the station's registry status, operational flag, and `dateLastVerified` alongside the comments so you can flag mismatches like "listed operational, but recent check-ins report a fault"
 - An empty result is **not** an error — a station with no check-ins returns `comments: []`; absence of reports is not evidence the charger works

@@ -212,11 +212,11 @@ z.object({
 ```ts
 errors: [
   { reason: 'invalid_location', code: JsonRpcErrorCode.InvalidParams,
-    when: 'Neither a center (latitude+longitude+distance) nor a boundingbox was provided, or both were',
-    recovery: 'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one. Geocode a place name with openstreetmap_geocode to obtain coordinates.' },
+    when: 'No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude',
+    recovery: 'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_geocode to obtain coordinates.' },
   { reason: 'no_stations', code: JsonRpcErrorCode.NotFound,
-    when: 'The search and filters returned zero stations',
-    recovery: 'Widen the distance/bounding box, relax filters (drop minpowerkw or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.' },
+    when: 'Open Charge Map holds no station for the search area and filters — either it returned nothing at all, or every station it returned was ruled out and there were no further candidates',
+    recovery: 'Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.' },
   { reason: 'upstream_unavailable', code: JsonRpcErrorCode.ServiceUnavailable, retryable: true,
     when: 'OCM returned a non-2xx response or timed out',
     recovery: 'Retry after a short delay. If it persists, OCM may be rate-limiting or down — reduce call frequency.' },
@@ -339,12 +339,13 @@ z.object({
   })).describe('Matching reference entries, best/exact match first. Use the id in a find_stations filter.'),
   totalCount: z.number().describe('Number of entries returned.'),
   filterParam: z.string().optional().describe('The find_stations input parameter these IDs feed (e.g. "connectiontypeid", "operatorid"). Omitted for categories with no direct filter (currenttypes, countries→use countrycode).'),
-  snapshotDate: z.string().describe('Date the bundled reference snapshot was captured, so callers know the data vintage.'),
+  snapshotDate: z.string().describe('Date the reference data in this response was captured — the day the live refresh ran when source is "live", the bundled snapshot\'s own capture date when it is "bundled".'),
+  source: z.enum(['live', 'bundled']).describe('Where these entries came from: a successful startup refresh, or the snapshot shipped with the server.'),
   attribution: z.string().describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
 })
 ```
 
-`totalCount` via `ctx.enrich.total(n)`; truncation (browsing a category larger than `limit` — only `operators`/`countries` exceed it) via `ctx.enrich.truncated({ shown, cap })`, declared on the enrichment block. `format()` renders each match as `{id} — {title}{ formalName/isoCode/detail }`, then `filterParam` guidance, then `snapshotDate` + attribution.
+`totalCount` via `ctx.enrich.total(n)`; truncation (browsing a category larger than `limit` — only `operators`/`countries` exceed it) via `ctx.enrich.truncated({ shown, cap })`, declared on the enrichment block. `format()` renders each match as `{id} — {title}{ formalName/isoCode/detail }`, then `filterParam` guidance, then `source` + `snapshotDate` + attribution.
 
 **Matching:** normalize (lowercase, strip punctuation/diacritics) and require every query token to appear in title / formal name / alias, over the **complete** category set (not a page). Curated aliases for the connectors agents actually name: `J1772`→Type 1 (1), `CCS`→both CCS (32, 33) with CCS Type 2 (33) ranked first, `Supercharger`/`NACS`→27, `Type 2`→25/1036. No fuzzy fallback in v1 — on empty match, return zero matches with a recovery that says "browse the category with no query."
 
@@ -366,7 +367,7 @@ errors: [
 
 Community check-ins for one station — the honest reliability signal beyond the registry flag. Wraps `GET /v3/poi?chargepointid=<id>&includecomments=true`, extracting the embedded `UserComments[]`. (There is **no** standalone `/v3/comments` GET endpoint — verified 404; comments are only available embedded in the POI.) Returns the comments **plus** the registry status and last-verified date so the agent can directly compare claim vs. reports.
 
-**Note on `maxresults`:** This parameter controls how many comments the handler returns after extracting from the POI, but the OCM `/poi` endpoint itself does not paginate or limit the embedded `UserComments[]` array — all comments for the station are returned by the API and the handler trims to `maxresults` (newest first). There is no server-side comment pagination.
+**Note on `maxresults` and `offset`:** OCM does not paginate the embedded `UserComments[]` array — one `/poi` call returns every comment a station has. The whole list is therefore resident before the handler touches it, so `offset`/`maxresults` are a direct slice of it (newest first) and `totalCount` is the exact comment count. Nothing is unreachable: paging costs no extra upstream calls.
 
 **Description (final):**
 > Read community check-ins and comments for one Open Charge Map station — the real-world reliability signal beyond the operator-reported registry status. Returns user comments and fault reports with ratings and dates, alongside the station's current registry status and last-verified date so you can flag mismatches like "listed operational, but the last few check-ins report a fault." Obtain a station ID from openchargemap_find_stations.
@@ -514,8 +515,9 @@ OCM v3 has two endpoints this server uses; reference data is bundled.
 - **No standalone comments endpoint.** Comments are only available embedded in the POI (`includecomments=true`); there is no way to query the comment stream independently of a station, and no global "recent fault reports across all stations" query.
 - **Coordinate-native — no place-name search.** Place names must be geocoded externally (`openstreetmap_geocode`). The server intentionally does not geocode.
 - **Connection-level power is frequently estimated or absent.** Many `PowerKW` values are OCM estimates ("kW power is an estimate based on the connection type" appears in connection comments) or null. `minpowerkw` filtering is only as good as the underlying data; treat power as approximate.
-- **Reference snapshot vintage.** Bundled reference data is a point-in-time snapshot (dated via `snapshotDate` / `REFERENCE_SNAPSHOT_DATE`). New operators or connector types added to OCM after the snapshot won't resolve until the snapshot is refreshed or `OPENCHARGEMAP_REFERENCE_REFRESH` is enabled. Connector types are near-static; the operator list grows slowly.
-- **`maxresults` caps the result set, not the corpus.** OCM may have more stations than returned; the truncation enrichment fields disclose when the cap was hit. There is no cursor-based pagination in v1 — widen filters or shrink the area instead.
+- **Reference snapshot vintage.** Bundled reference data is a point-in-time snapshot (`REFERENCE_SNAPSHOT_DATE`). New operators or connector types added to OCM after it won't resolve until the snapshot is refreshed or `OPENCHARGEMAP_REFERENCE_REFRESH` is enabled. Connector types are near-static; the operator list grows slowly. `snapshotDate` reports the vintage of whichever set is actually in memory, paired with `source` (`live` | `bundled`) — `/referencedata` publishes no dataset date, `Last-Modified`, or `ETag`, so a successful refresh is dated by the moment it succeeded, and a failed one keeps the bundle's date rather than drifting forward.
+- **`maxresults` caps the page, not the corpus.** `offset` plus the `nextOffset` each truncated page reports reads the remainder, but paging is bounded: OCM ignores `offset`, `skip`, and `page` (confirmed live — identical records in identical order with and without them) and returns a bare array with no match count in the body or headers. So pagination is necessarily server-side, over an over-fetched candidate page of at most 500 records per search, and `totalCount` on `find_stations` is what that search retrieved: exact only when the page came back short of the candidate cap, otherwise a floor that rises as a deeper window widens the page. The notice states which of the two applies, and names widening filters or shrinking the area only when the page came back full — telling a caller whose page came back short to narrow their search would cost them stations that paging reaches. The candidate page is sized from a 100/250/500 ladder, so a window that outgrows its rung refetches one size up; the deepest usable `offset` is 499, one below the 500 records a single search can reach.
+- **Paged results can shift between calls.** A larger `maxresults` returns the same ordered prefix (verified for radius and bounding-box searches alike), which is what lets a wider candidate page stand in for a narrower one. But OCM is edited continuously and results are cached for ten minutes, so a station added or removed between two fetches of the same search can move what a later `offset` lands on. Ordering is stable; membership is not.
 
 ---
 
