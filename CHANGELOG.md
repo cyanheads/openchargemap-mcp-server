@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-08-25 · ⚠️ Breaking
+
+Tool inputs are now strict at the root, the station resource declares an output schema and cache lifetime, and the Docker build cross-compiles cleanly on Bun 1.4
+
 ## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-08-06
 
 Offset pagination on capped list outputs, fixed find_stations cap accounting, and reference-data source disclosure

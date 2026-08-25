@@ -1,10 +1,9 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-08-06 16:14:06
+Generated on: 2026-08-25 07:14:16
 
 ```text
 openchargemap-mcp-server/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -15,6 +14,8 @@ openchargemap-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
@@ -174,7 +175,8 @@ openchargemap-mcp-server/
 │       ├── find-stations.tool.test.ts
 │       ├── get-station-comments.tool.test.ts
 │       ├── get-station.tool.test.ts
-│       └── lookup-reference.tool.test.ts
+│       ├── lookup-reference.tool.test.ts
+│       └── station-schema.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
