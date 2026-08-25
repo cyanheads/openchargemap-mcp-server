@@ -7,6 +7,7 @@
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { DetailStationSchema } from '@/mcp-server/tools/definitions/_station-schema.js';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
 
@@ -16,8 +17,24 @@ export const stationResource = resource('openchargemap://station/{id}', {
   description:
     'Full Open Charge Map station record by numeric OCM ID, including community comments.',
   mimeType: 'application/json',
+  // The service caches a station record for 600s, so a client holding one for the same window
+  // never sees anything staler than a second read would return.
+  cacheHint: { ttlMs: 600_000 },
   params: z.object({
     id: z.string().regex(/^\d+$/).describe('Numeric OCM station ID.'),
+  }),
+
+  output: z.object({
+    station: DetailStationSchema.describe('The full station record, with community comments.'),
+    reliabilityNote: z
+      .string()
+      .optional()
+      .describe(
+        'A caveat when the registry status, verification age, coordinates, or comments suggest the listing may not reflect reality. Omitted when there is nothing to flag.',
+      ),
+    attribution: z
+      .string()
+      .describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
   }),
 
   errors: [

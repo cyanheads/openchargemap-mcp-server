@@ -9,53 +9,11 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
 import {
-  CommentSchema,
+  DetailStationSchema,
   renderComment,
   renderStationBlock,
-  StationSchema,
   visibleComments,
 } from './_station-schema.js';
-
-/** Detail station = the shared station shape plus detail-only fields. */
-const DetailStationSchema = StationSchema.extend({
-  generalComments: z
-    .string()
-    .optional()
-    .describe('Operator/free-text notes about the station. Absent when none on record.'),
-  usageCost: z
-    .string()
-    .optional()
-    .describe(
-      'Free-text cost description (e.g. "£0.30/kWh"). Often absent — absence means unknown, not free.',
-    ),
-  dataProviderUrl: z.string().optional().describe('Source provider website.'),
-  dateLastStatusUpdate: z
-    .string()
-    .nullable()
-    .optional()
-    .describe('ISO 8601 timestamp of the last status update.'),
-  submissionStatus: z
-    .string()
-    .optional()
-    .describe('OCM submission/publication status (e.g. "Imported and Published").'),
-  media: z
-    .array(
-      z
-        .object({
-          url: z.string().describe('Image URL.'),
-          comment: z.string().optional().describe('Caption / comment.'),
-        })
-        .describe('A user-submitted photo.'),
-    )
-    .optional()
-    .describe('User-submitted photos of the station. Absent when none.'),
-  comments: z
-    .array(CommentSchema)
-    .optional()
-    .describe(
-      'Community check-ins, present only when includeComments=true. Empty array means none on record.',
-    ),
-});
 
 export const getStation = tool('openchargemap_get_station', {
   title: 'openchargemap-mcp-server: get station',

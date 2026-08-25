@@ -50,6 +50,21 @@ afterEach(() => {
 
 const ctx = () => createMockContext({ tenantId: 'test', errors: findStations.errors });
 
+/**
+ * Run a handler call and return what it threw. `tool()` types `handler` as `T | Promise<T>`, so the
+ * call is awaited rather than promise-chained — and a call that returns instead of throwing fails
+ * here rather than silently satisfying the assertions below.
+ */
+async function thrownBy(run: () => unknown): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw error;
+  }
+  throw new Error('Expected the handler to throw, but it returned.');
+}
+
 describe('openchargemap_find_stations', () => {
   it('finds stations near a point and returns normalized fields (headline goal)', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
@@ -249,16 +264,16 @@ describe('openchargemap_find_stations', () => {
   ])(
     'rejects a bounding box carrying %s instead of ignoring it',
     async (_label, coordinate, diagnosis) => {
-      const error = await findStations
-        .handler(
+      const error = await thrownBy(() =>
+        findStations.handler(
           findStations.input.parse({
             ...coordinate,
             boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
             maxresults: 2,
           }),
           ctx(),
-        )
-        .catch((thrown) => thrown);
+        ),
+      );
 
       expect(error).toMatchObject({
         code: JsonRpcErrorCode.InvalidParams,
@@ -523,22 +538,20 @@ describe('openchargemap_find_stations', () => {
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
   it('names whether both location modes or neither were supplied', async () => {
-    const neither = findStations
-      .handler(findStations.input.parse({}), ctx())
-      .catch((error) => error);
-    const both = findStations
-      .handler(
+    const neither = await thrownBy(() => findStations.handler(findStations.input.parse({}), ctx()));
+    const both = await thrownBy(() =>
+      findStations.handler(
         findStations.input.parse({
           latitude: 47,
           longitude: -122,
           boundingbox: { sw_lat: 46, sw_lng: -123, ne_lat: 48, ne_lng: -121 },
         }),
         ctx(),
-      )
-      .catch((error) => error);
+      ),
+    );
 
-    await expect(neither).resolves.toMatchObject({ message: expect.stringMatching(/provide/i) });
-    await expect(both).resolves.toMatchObject({ message: expect.stringMatching(/not both/i) });
+    expect(neither.message).toMatch(/provide/i);
+    expect(both.message).toMatch(/not both/i);
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
@@ -549,9 +562,9 @@ describe('openchargemap_find_stations', () => {
   ])(
     'names the missing coordinate when only %s is supplied',
     async (_label, input, named, absent) => {
-      const error = await findStations
-        .handler(findStations.input.parse(input), ctx())
-        .catch((thrown) => thrown);
+      const error = await thrownBy(() =>
+        findStations.handler(findStations.input.parse(input), ctx()),
+      );
 
       expect(error).toMatchObject({ data: { reason: 'invalid_location' } });
       expect(error.message).toMatch(named);

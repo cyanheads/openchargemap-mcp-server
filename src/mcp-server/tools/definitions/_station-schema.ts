@@ -191,6 +191,51 @@ export const StationSchema = z
 export type Station = z.infer<typeof StationSchema>;
 
 /**
+ * The full station record: the shared station shape plus the fields OCM populates only on a
+ * `verbose=true` detail fetch. Shared by openchargemap_get_station and the station resource, which
+ * serve the same record from the same normalizer.
+ */
+export const DetailStationSchema = StationSchema.extend({
+  generalComments: z
+    .string()
+    .optional()
+    .describe('Operator/free-text notes about the station. Absent when none on record.'),
+  usageCost: z
+    .string()
+    .optional()
+    .describe(
+      'Free-text cost description (e.g. "£0.30/kWh"). Often absent — absence means unknown, not free.',
+    ),
+  dataProviderUrl: z.string().optional().describe('Source provider website.'),
+  dateLastStatusUpdate: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('ISO 8601 timestamp of the last status update.'),
+  submissionStatus: z
+    .string()
+    .optional()
+    .describe('OCM submission/publication status (e.g. "Imported and Published").'),
+  media: z
+    .array(
+      z
+        .object({
+          url: z.string().describe('Image URL.'),
+          comment: z.string().optional().describe('Caption / comment.'),
+        })
+        .describe('A user-submitted photo.'),
+    )
+    .optional()
+    .describe('User-submitted photos of the station. Absent when none.'),
+  comments: z
+    .array(CommentSchema)
+    .optional()
+    .describe(
+      'Community check-ins, present only when includeComments=true. Empty array means none on record.',
+    ),
+}).describe('A full station record, including detail-only fields.');
+
+/**
  * Render a three-state flag as `label: yes` / `label: no`, or nothing when the value is absent.
  * Absent means OCM has no fact on record; an explicit `false` IS a fact and must reach the text,
  * or a client reading only `content[]` sees it as unknown.
@@ -333,7 +378,11 @@ export function renderComment(c: Comment): string {
     .join(', ');
   const tag = meta ? ` (${meta})` : '';
   // Only open the colon when something follows it, or a check-in whose whole meaning is the
-  // outcome renders as a line ending in a dangling separator.
-  const body = [c.comment?.trim(), c.relatedUrl].filter(Boolean).join(' ');
+  // outcome renders as a line ending in a dangling separator. Commenters routinely paste the
+  // same link inline AND into relatedUrl, so append it only when the text does not already
+  // carry it — otherwise the rendered line ends in the URL twice.
+  const text = c.comment?.trim();
+  const link = c.relatedUrl && !text?.includes(c.relatedUrl) ? c.relatedUrl : undefined;
+  const body = [text, link].filter(Boolean).join(' ');
   return `${date}${user}${tag}${body ? `: ${body}` : ''}`;
 }

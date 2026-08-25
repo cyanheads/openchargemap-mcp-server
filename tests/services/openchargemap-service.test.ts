@@ -1,10 +1,10 @@
 /**
  * @fileoverview Tests for OpenChargeMapService at the service boundary — focused on the cache-key
  * contract. The framework's StorageService rejects any key outside `/^[a-zA-Z0-9_.\-/]+$/` (colons,
- * `?`, `=`, `&` are invalid), but the in-memory storage backing `createMockContext` does NOT enforce
- * that rule — so a malformed cache key sails through handler tests and only throws against real
- * (HTTP/persistent) storage at runtime. These tests capture the exact keys the service passes to
- * `ctx.state` and assert they are storage-safe, catching that class of bug the mock cannot.
+ * `?`, `=`, `&` are invalid). `createMockContext` now runs that same validator, so a malformed key
+ * throws in a handler test too — but as a generic storage rejection from wherever it happened to be
+ * written. These tests capture the exact keys the service passes to `ctx.state` and assert them
+ * against the pattern directly, so a regression names the offending key instead of a caller.
  * @module tests/services/openchargemap-service.test
  */
 

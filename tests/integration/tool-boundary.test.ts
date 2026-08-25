@@ -4,6 +4,7 @@
  * @module tests/integration/tool-boundary.test
  */
 
+import type { ErrorContract } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -50,7 +51,7 @@ beforeEach(async () => {
   initOpenChargeMapService(serverConfig);
 });
 
-const toolContext = (errors: Parameters<typeof createMockContext>[0]['errors']) =>
+const toolContext = <const TErrors extends readonly ErrorContract[] | undefined>(errors: TErrors) =>
   createMockContext({ tenantId: 'integration', errors });
 
 describe('tool integration at the OCM boundary', () => {

@@ -55,6 +55,15 @@ describe('openchargemap://station/{id}', () => {
     expect(result.station.id).toBe(145452);
     expect(result.station.comments).toHaveLength(2);
     expect(result.attribution).toContain('CC BY 4.0');
+    // The framework parses the handler return against `output` before it reaches the client, so a
+    // shape the schema rejects is a failed read, not a lenient one.
+    expect(stationResource.output?.safeParse(result).success).toBe(true);
+  });
+
+  it('advertises a cache lifetime no longer than the service result cache', () => {
+    // A client may hold the record for this long; the service serves its own cached copy for 600s,
+    // so a longer hint would let a reader see something a second read would not have returned.
+    expect(stationResource.cacheHint?.ttlMs).toBe(600_000);
   });
 
   it('throws not_found when the station does not exist (empty array)', async () => {

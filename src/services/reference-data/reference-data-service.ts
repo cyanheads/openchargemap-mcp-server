@@ -7,7 +7,12 @@
  * @module services/reference-data/reference-data-service
  */
 
-import { fetchWithTimeout, logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
+import {
+  fetchWithTimeout,
+  logger,
+  requestContextService,
+  withExtra,
+} from '@cyanheads/mcp-ts-core/utils';
 import type { ServerConfig } from '@/config/server-config.js';
 import {
   REFERENCE_SNAPSHOT,
@@ -291,21 +296,21 @@ export class ReferenceDataService {
         const liveKey = LIVE_CATEGORY_KEYS[category];
         const list = raw[liveKey];
         if (!Array.isArray(list)) {
-          logger.warning('Reference refresh missing category; keeping bundled snapshot', {
-            ...reqCtx,
-            category: liveKey,
-          });
+          logger.warning(
+            'Reference refresh missing category; keeping bundled snapshot',
+            withExtra(reqCtx, { category: liveKey }),
+          );
           return;
         }
         result[category] = (list as ReferenceEntry[]).map((e) => ({ ...e }));
       }
-      logger.info('Reference data refreshed from live endpoint', { ...reqCtx });
+      logger.info('Reference data refreshed from live endpoint', reqCtx);
       return result;
     } catch (error) {
-      logger.warning('Reference refresh failed; keeping bundled snapshot', {
-        ...reqCtx,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logger.warning(
+        'Reference refresh failed; keeping bundled snapshot',
+        withExtra(reqCtx, { error: error instanceof Error ? error.message : String(error) }),
+      );
       return;
     }
   }

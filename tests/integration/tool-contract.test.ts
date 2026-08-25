@@ -91,12 +91,13 @@ toolContractSuite(findStations, {
         // The enrichment trailer mirrors the notice into content[] for format()-only clients, and
         // names what totalCount counts — the framework's default renders a bare "N total", which
         // reads as a registry-wide match total this tool cannot know.
-        expect(result.content?.at(-1)).toMatchObject({
-          type: 'text',
-          text: expect.stringContaining('offset 1'),
-        });
-        expect(result.content?.at(-1)?.text).toContain('2 matching stations retrieved');
-        expect(result.content?.at(-1)?.text).not.toContain('**2 total**');
+        const trailer = result.content?.at(-1);
+        if (trailer?.type !== 'text') {
+          throw new Error(`expected a trailing text block, got ${trailer?.type ?? 'none'}`);
+        }
+        expect(trailer.text).toContain('offset 1');
+        expect(trailer.text).toContain('2 matching stations retrieved');
+        expect(trailer.text).not.toContain('**2 total**');
       },
     },
     {

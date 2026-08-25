@@ -43,6 +43,30 @@ describe('definition smoke checks', () => {
     ).toBe(true);
   });
 
+  // Tool inputs are strict at the root, so a key the schema does not declare is rejected by name
+  // rather than stripped. The near-miss casing below is the case that matters: it used to run the
+  // search with the default unit and report nothing about the argument it dropped.
+  it('rejects an undeclared root key by name instead of stripping it', () => {
+    const result = findStations.input.safeParse({
+      latitude: 47.6062,
+      longitude: -122.3321,
+      distanceunit: 'Miles',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({ code: 'unrecognized_keys', keys: ['distanceunit'] }),
+    );
+  });
+
+  // A nested object still strips, so a handler reading only declared inner fields is unaffected.
+  it('still accepts an undeclared key nested inside boundingbox', () => {
+    expect(
+      findStations.input.safeParse({
+        boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2, zoom: 12 },
+      }).success,
+    ).toBe(true);
+  });
+
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
   // The service re-tags both 401 and 403 as auth_failed, so every tool that can hit the OCM HTTP
   // boundary must say so — the same stale string previously lived in all three files.
@@ -57,8 +81,11 @@ describe('definition smoke checks', () => {
 
   it('exposes the station resource with numeric-id params and a handler', () => {
     expect(stationResource.name).toBe('openchargemap-station');
-    expect(stationResource.params.safeParse({ id: '145452' }).success).toBe(true);
-    expect(stationResource.params.safeParse({ id: 'not-a-number' }).success).toBe(false);
+    // `params` is optional on the definition type — a resource may take none — so assert it is
+    // declared before reading it, or a dropped schema would surface as a confusing parse failure.
+    expect(stationResource.params).toBeDefined();
+    expect(stationResource.params?.safeParse({ id: '145452' }).success).toBe(true);
+    expect(stationResource.params?.safeParse({ id: 'not-a-number' }).success).toBe(false);
     expect(stationResource.handler).toBeTypeOf('function');
   });
 });

@@ -8,7 +8,7 @@
 import type { RawPoi } from '@/services/openchargemap/types.js';
 
 /** A fully-populated station (Seattle, ChargePoint, Temporarily Unavailable but IsOperational:true). */
-export const FULL_POI: RawPoi = {
+export const FULL_POI = {
   ID: 145452,
   UUID: '3054F576-5C0C-4FAB-A920-F06AA3EE743A',
   OperatorID: 5,
@@ -55,10 +55,10 @@ export const FULL_POI: RawPoi = {
       Quantity: 2,
     },
   ],
-};
+} satisfies RawPoi;
 
 /** Detail-only fields layered on FULL_POI for verbose=true responses. */
-export const FULL_POI_DETAIL: RawPoi = {
+export const FULL_POI_DETAIL = {
   ...FULL_POI,
   NumberOfPoints: 2,
   UsageCost: '$0.30/kWh',
@@ -93,13 +93,13 @@ export const FULL_POI_DETAIL: RawPoi = {
       DateCreated: '2025-06-01T10:00:00Z',
     },
   ],
-};
+} satisfies RawPoi;
 
 /**
  * A station whose whole comment list carries no information — OCM stores runs of check-ins with a
  * null Comment, null Rating, and no CheckinStatusType (verified on real records).
  */
-export const BLANK_COMMENTS_POI: RawPoi = {
+export const BLANK_COMMENTS_POI = {
   ...FULL_POI,
   ID: 71749,
   StatusTypeID: 50,
@@ -114,25 +114,25 @@ export const BLANK_COMMENTS_POI: RawPoi = {
     Rating: null,
     DateCreated: `2024-0${n}-01T00:00:00Z`,
   })),
-};
+} satisfies RawPoi;
 
 /**
  * A partly-operational station (StatusType 75) — OCM flags it operational, but only some of the
  * equipment on site works.
  */
-export const PARTLY_OPERATIONAL_POI: RawPoi = {
+export const PARTLY_OPERATIONAL_POI = {
   ...FULL_POI,
   ID: 300001,
   StatusTypeID: 75,
   StatusType: { ID: 75, Title: 'Partly Operational (Mixed)', IsOperational: true },
   DateLastVerified: '2026-08-01T00:00:00Z',
-};
+} satisfies RawPoi;
 
 /**
  * A sparse station — omits NumberOfPoints/UsageCost/GeneralComments, has NO StatusType key at all
  * (verified to happen on real records), null connection power, no operator.
  */
-export const SPARSE_POI: RawPoi = {
+export const SPARSE_POI = {
   ID: 253415,
   UUID: 'AAAA1111-2222-3333-4444-555566667777',
   DateLastVerified: null,
@@ -155,14 +155,14 @@ export const SPARSE_POI: RawPoi = {
     },
   ],
   // StatusType key entirely absent; UsageType absent; OperatorInfo absent; MediaItems absent.
-};
+} satisfies RawPoi;
 
 /**
  * A real-looking US station that OCM stores at the 0,0 sentinel (open ocean, Gulf of Guinea) — a
  * systemic data-quality pattern, not a real location. A proximity search must drop it; a direct
  * ID lookup keeps it but flags the coordinate.
  */
-export const ZERO_COORD_POI: RawPoi = {
+export const ZERO_COORD_POI = {
   ID: 494804,
   UUID: 'ZZZZ0000-0000-0000-0000-000000000000',
   OperatorID: 5,
@@ -191,7 +191,7 @@ export const ZERO_COORD_POI: RawPoi = {
       Quantity: 4,
     },
   ],
-};
+} satisfies RawPoi;
 
 /** Build a minimal fake `Response` whose `.json()` resolves to `body`. */
 export function jsonResponse(body: unknown): Response {
