@@ -20,6 +20,10 @@ await createApp({
   name: 'openchargemap-mcp-server',
   title: 'openchargemap-mcp-server',
   websiteUrl: 'https://github.com/cyanheads/openchargemap-mcp-server',
+  // No tool asks the caller for input mid-handler, so nothing here needs a session to answer a
+  // prompt. Declared in src/ rather than left to MCP_SESSION_MODE, which the container and
+  // .env.example both already pin to the same value.
+  sessionMode: 'stateless',
   tools: [findStations, getStation, lookupReference, getStationComments],
   resources: [stationResource],
   instructions:

@@ -58,6 +58,7 @@ export const getStation = tool('openchargemap_get_station', {
       retryable: true,
       when: 'OCM returned a non-2xx response or timed out.',
       recovery: 'Retry after a short delay. If it persists, OCM may be rate-limiting or down.',
+      thrownBy: 'service',
     },
     {
       reason: 'auth_failed',
@@ -65,6 +66,7 @@ export const getStation = tool('openchargemap_get_station', {
       when: 'OCM returned HTTP 401 or 403 — the API key is missing or invalid.',
       recovery:
         'Set a valid OPENCHARGEMAP_API_KEY (free signup at openchargemap.org). This is a server configuration issue, not an input error.',
+      thrownBy: 'service',
     },
   ],
 
