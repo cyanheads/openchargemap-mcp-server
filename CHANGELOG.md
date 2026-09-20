@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-09-20 · ⚠️ Breaking · 🛡️ Security
+
+Adopts mcp-ts-core 0.13.6: argument rejections return InvalidParams with a recovery hint, sessionMode is declared in src/, and the skill tree moves to framework-skills/ so installing the plugin no longer leaks development skills. Carries the SSRF, ReDoS, and rate-limit-key security fixes; raises the Bun floor to >=1.4.0.
+
 ## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-08-25 · ⚠️ Breaking
 
 Tool inputs are now strict at the root, the station resource declares an output schema and cache lifetime, and the Docker build cross-compiles cleanly on Bun 1.4
