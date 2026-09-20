@@ -1,20 +1,33 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "openchargemap-mcp-server",
   "version": "0.1.8",
   "description": "Find EV charging stations worldwide by location and connector via the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "Casey Hand @cyanheads"
+    "name": "Casey Hand @cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
   "homepage": "https://github.com/cyanheads/openchargemap-mcp-server",
   "repository": "https://github.com/cyanheads/openchargemap-mcp-server",
   "license": "Apache-2.0",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "open-charge-map", "ev-charging"],
+  "userConfig": {
+    "OPENCHARGEMAP_API_KEY": {
+      "type": "string",
+      "title": "Open Charge Map API Key",
+      "description": "Sent as the X-API-Key header on every request. Free instant signup at openchargemap.org.",
+      "sensitive": true,
+      "required": true
+    }
+  },
   "mcpServers": {
     "openchargemap-mcp-server": {
       "command": "npx",
       "args": ["-y", "@cyanheads/openchargemap-mcp-server"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
-        "OPENCHARGEMAP_API_KEY": "${OPENCHARGEMAP_API_KEY}"
+        "OPENCHARGEMAP_API_KEY": "${user_config.OPENCHARGEMAP_API_KEY}"
       }
     }
   }

@@ -16,7 +16,7 @@
     "displayName": "openchargemap-mcp-server",
     "shortDescription": "Global Open Charge Map EV charging station search, detail, and reliability check-ins.",
     "longDescription": "Find-and-detail MCP server over the community-maintained Open Charge Map registry. Find EV charging stations near a point or in a bounding box filtered by connector, power, and network; get full station detail; resolve connector/operator reference IDs offline; and read community check-ins for real-world reliability.",
-    "developerName": "Casey Hand @cyanheads",
+    "developerName": "cyanheads",
     "category": "data",
     "capabilities": ["Read"],
     "websiteURL": "https://github.com/cyanheads/openchargemap-mcp-server",
