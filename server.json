@@ -18,18 +18,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/openchargemap-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.1.9",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:stdio"
-        }
-      ],
       "environmentVariables": [
         {
           "name": "OPENCHARGEMAP_API_KEY",
@@ -67,19 +57,15 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/openchargemap-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.1.9",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:http"
-        }
-      ],
       "environmentVariables": [
+        {
+          "name": "MCP_TRANSPORT_TYPE",
+          "description": "Selects the HTTP transport.",
+          "format": "string",
+          "value": "http"
+        },
         {
           "name": "OPENCHARGEMAP_API_KEY",
           "description": "Open Charge Map API key, sent as the X-API-Key header on every request. Free instant signup at openchargemap.org.",
