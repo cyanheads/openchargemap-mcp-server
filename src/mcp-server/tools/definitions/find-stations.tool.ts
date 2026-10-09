@@ -1,7 +1,7 @@
 /**
  * @fileoverview openchargemap_find_stations — find EV charging stations from the global Open
  * Charge Map registry near a point or within a bounding box, with connector/power/network/usage/
- * status filters. Coordinate-native; place names geocode via openstreetmap_geocode first.
+ * status filters. Coordinate-native; place names geocode via openstreetmap_search_places first.
  * @module mcp-server/tools/definitions/find-stations.tool
  */
 
@@ -38,7 +38,7 @@ const FindStationsInput = z.object({
     .max(90)
     .optional()
     .describe(
-      'Center latitude (WGS84 decimal degrees). Use with longitude + distance for a radius search. Resolve place names via openstreetmap_geocode first.',
+      'Center latitude (WGS84 decimal degrees). Use with longitude + distance for a radius search. Resolve place names via openstreetmap_search_places first.',
     ),
   longitude: z
     .number()
@@ -143,7 +143,7 @@ const FindStationsInput = z.object({
 export const findStations = tool('openchargemap_find_stations', {
   title: 'openchargemap-mcp-server: find stations',
   description:
-    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
+    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_search_places first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: FindStationsInput,
@@ -204,7 +204,7 @@ export const findStations = tool('openchargemap_find_stations', {
       code: JsonRpcErrorCode.InvalidParams,
       when: 'No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude.',
       recovery:
-        'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_geocode to obtain coordinates.',
+        'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_search_places to obtain coordinates.',
     },
     {
       reason: 'no_stations',
@@ -241,9 +241,7 @@ export const findStations = tool('openchargemap_find_stations', {
     // center let `{ latitude, boundingbox }` through as a bounding-box-only call, and the latitude
     // was then dropped with nothing in the response saying so.
     if (hasBbox ? hasLatitude || hasLongitude : !hasRadius) {
-      throw ctx.fail('invalid_location', locationFailure({ hasLatitude, hasLongitude, hasBbox }), {
-        ...ctx.recoveryFor('invalid_location'),
-      });
+      throw ctx.fail('invalid_location', locationFailure({ hasLatitude, hasLongitude, hasBbox }));
     }
 
     const params: SearchPoiParams = {
@@ -281,9 +279,7 @@ export const findStations = tool('openchargemap_find_stations', {
     });
 
     if (matches.length === 0 && !moreUpstream) {
-      throw ctx.fail('no_stations', 'No charging stations matched the search and filters.', {
-        ...ctx.recoveryFor('no_stations'),
-      });
+      throw ctx.fail('no_stations', 'No charging stations matched the search and filters.');
     }
 
     const stations = matches.slice(input.offset, input.offset + input.maxresults);

@@ -51,9 +51,7 @@ export const stationResource = resource('openchargemap://station/{id}', {
     const id = Number(params.id);
     const station = await getOpenChargeMapService().getPoi(id, { includeComments: true }, ctx);
     if (!station) {
-      throw ctx.fail('not_found', `No Open Charge Map station with ID ${id}.`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No Open Charge Map station with ID ${id}.`);
     }
     const reliabilityNote = buildReliabilityNote({
       status: station.status,

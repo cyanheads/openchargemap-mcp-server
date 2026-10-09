@@ -6,7 +6,7 @@
  */
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fetchWithTimeout = vi.fn();
@@ -48,6 +48,16 @@ beforeEach(async () => {
 afterEach(() => vi.clearAllMocks());
 
 const ctx = () => createMockContext({ tenantId: 'test', errors: getStationComments.errors });
+
+/**
+ * The recovery hint `errors[]` declares for a reason. A service throw carries only the reason; the
+ * handler boundary (production, and `runToolContract`) fills this hint in from the contract.
+ */
+function declaredRecovery(reason: string): string {
+  const hint = getStationComments.errors?.find((entry) => entry.reason === reason)?.recovery;
+  if (!hint) throw new Error(`getStationComments declares no recovery for ${reason}`);
+  return hint;
+}
 
 describe('openchargemap_get_station_comments', () => {
   it.each([
@@ -247,14 +257,20 @@ describe('openchargemap_get_station_comments', () => {
 
   it('maps a 401 to auth_failed with recovery guidance', async () => {
     fetchWithTimeout.mockRejectedValue(new McpError(JsonRpcErrorCode.Unauthorized, 'HTTP 401'));
-    await expect(
-      getStationComments.handler(getStationComments.input.parse({ id: 1 }), ctx()),
-    ).rejects.toMatchObject({
-      code: JsonRpcErrorCode.Unauthorized,
-      data: {
-        reason: 'auth_failed',
-        retryable: false,
-        recovery: { hint: expect.any(String) },
+    const result = await runToolContract(
+      getStationComments,
+      { id: 1 },
+      { context: { tenantId: 'test' } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.Unauthorized,
+        data: {
+          reason: 'auth_failed',
+          retryable: false,
+          recovery: { hint: declaredRecovery('auth_failed') },
+        },
       },
     });
   });
@@ -263,14 +279,20 @@ describe('openchargemap_get_station_comments', () => {
     fetchWithTimeout.mockRejectedValue(
       new McpError(JsonRpcErrorCode.ServiceUnavailable, 'HTTP 503'),
     );
-    await expect(
-      getStationComments.handler(getStationComments.input.parse({ id: 1 }), ctx()),
-    ).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ServiceUnavailable,
-      data: {
-        reason: 'upstream_unavailable',
-        retryable: true,
-        recovery: { hint: expect.any(String) },
+    const result = await runToolContract(
+      getStationComments,
+      { id: 1 },
+      { context: { tenantId: 'test' } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: {
+          reason: 'upstream_unavailable',
+          retryable: true,
+          recovery: { hint: declaredRecovery('upstream_unavailable') },
+        },
       },
     });
   });

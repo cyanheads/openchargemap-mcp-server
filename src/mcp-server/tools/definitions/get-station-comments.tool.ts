@@ -146,9 +146,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       ctx,
     );
     if (!station) {
-      throw ctx.fail('not_found', `No Open Charge Map station with ID ${input.id}.`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No Open Charge Map station with ID ${input.id}.`);
     }
 
     const allComments = station.comments ?? [];

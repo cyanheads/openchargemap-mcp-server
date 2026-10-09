@@ -151,9 +151,7 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
         : ref.resolve(category, input.query, input.limit, input.offset);
 
     if (input.query !== undefined && total === 0) {
-      throw ctx.fail('no_match', `No ${category} entry matched "${input.query}".`, {
-        ...ctx.recoveryFor('no_match'),
-      });
+      throw ctx.fail('no_match', `No ${category} entry matched "${input.query}".`);
     }
 
     ctx.enrich.total(total);

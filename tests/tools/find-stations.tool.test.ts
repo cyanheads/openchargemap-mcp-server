@@ -6,7 +6,7 @@
  */
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RawPoi } from '@/services/openchargemap/types.js';
 
@@ -49,6 +49,16 @@ afterEach(() => {
 });
 
 const ctx = () => createMockContext({ tenantId: 'test', errors: findStations.errors });
+
+/**
+ * The recovery hint `errors[]` declares for a reason. A throw carries only the reason; the handler
+ * boundary (production, and `runToolContract`) fills this hint in from the contract.
+ */
+function declaredRecovery(reason: string): string {
+  const hint = findStations.errors?.find((entry) => entry.reason === reason)?.recovery;
+  if (!hint) throw new Error(`findStations declares no recovery for ${reason}`);
+  return hint;
+}
 
 /**
  * Run a handler call and return what it threw. `tool()` types `handler` as `T | Promise<T>`, so the
@@ -307,10 +317,17 @@ describe('openchargemap_find_stations', () => {
 
   it('throws no_stations on an empty result set', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([]));
-    const input = findStations.input.parse({ latitude: 47, longitude: -122, connectiontypeid: 33 });
-    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_stations', recovery: { hint: expect.any(String) } },
+    const result = await runToolContract(
+      findStations,
+      { latitude: 47, longitude: -122, connectiontypeid: 33 },
+      { context: { tenantId: 'test' } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'no_stations', recovery: { hint: declaredRecovery('no_stations') } },
+      },
     });
   });
 
@@ -444,14 +461,20 @@ describe('openchargemap_find_stations', () => {
 
   it('maps a 401 to the complete auth_failed error envelope', async () => {
     fetchWithTimeout.mockRejectedValue(new McpError(JsonRpcErrorCode.Unauthorized, 'HTTP 401'));
-    await expect(
-      findStations.handler(findStations.input.parse({ latitude: 47, longitude: -122 }), ctx()),
-    ).rejects.toMatchObject({
-      code: JsonRpcErrorCode.Unauthorized,
-      data: {
-        reason: 'auth_failed',
-        retryable: false,
-        recovery: { hint: expect.any(String) },
+    const result = await runToolContract(
+      findStations,
+      { latitude: 47, longitude: -122 },
+      { context: { tenantId: 'test' } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.Unauthorized,
+        data: {
+          reason: 'auth_failed',
+          retryable: false,
+          recovery: { hint: declaredRecovery('auth_failed') },
+        },
       },
     });
   });

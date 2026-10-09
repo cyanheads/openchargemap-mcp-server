@@ -77,9 +77,7 @@ export const getStation = tool('openchargemap_get_station', {
       ctx,
     );
     if (!station) {
-      throw ctx.fail('not_found', `No Open Charge Map station with ID ${input.id}.`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No Open Charge Map station with ID ${input.id}.`);
     }
     ctx.log.info('OCM detail fetched', { id: input.id, connections: station.connections.length });
 

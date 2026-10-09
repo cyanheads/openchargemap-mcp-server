@@ -264,7 +264,7 @@ export class OpenChargeMapService {
             signal: ctx.signal,
           });
         } catch (error) {
-          throw this.translateFetchError(error, ctx);
+          throw this.translateFetchError(error);
         }
         let data: unknown;
         try {
@@ -272,20 +272,17 @@ export class OpenChargeMapService {
         } catch (error) {
           throw this.malformedResponse(
             'Open Charge Map returned a body that is not valid JSON.',
-            ctx,
             error,
           );
         }
         if (!Array.isArray(data)) {
           throw this.malformedResponse(
             'Open Charge Map returned an unexpected (non-array) response.',
-            ctx,
           );
         }
         if (!data.every(isPoiRecord)) {
           throw this.malformedResponse(
             'Open Charge Map returned a station list containing an unreadable entry.',
-            ctx,
           );
         }
         return data;
@@ -298,16 +295,13 @@ export class OpenChargeMapService {
    * One envelope for every unreadable response body — invalid JSON, a non-array payload, or an
    * array carrying an unreadable entry. All three are the same client-facing failure as a non-2xx
    * (OCM did not return usable data), so they carry the declared `upstream_unavailable` reason and
-   * stay retryable rather than surfacing as a raw parser exception.
+   * stay retryable rather than surfacing as a raw parser exception. The calling tool's `errors[]`
+   * entry supplies the recovery hint at the handler boundary.
    */
-  private malformedResponse(message: string, ctx: Context, cause?: unknown): Error {
+  private malformedResponse(message: string, cause?: unknown): Error {
     return serviceUnavailable(
       message,
-      {
-        reason: 'upstream_unavailable',
-        retryable: true,
-        ...ctx.recoveryFor('upstream_unavailable'),
-      },
+      { reason: 'upstream_unavailable', retryable: true },
       { cause },
     );
   }
@@ -318,22 +312,17 @@ export class OpenChargeMapService {
    * everything else as `upstream_unavailable`/ServiceUnavailable (retryable) so the retry predicate
    * and the tool contracts align.
    */
-  private translateFetchError(error: unknown, ctx: Context): Error {
+  private translateFetchError(error: unknown): Error {
     const code = (error as { code?: number }).code;
     if (code === JsonRpcErrorCode.Unauthorized || code === JsonRpcErrorCode.Forbidden) {
       return unauthorized('Open Charge Map rejected the API key (HTTP 401/403).', {
         reason: 'auth_failed',
         retryable: false,
-        ...ctx.recoveryFor('auth_failed'),
       });
     }
     return serviceUnavailable(
       error instanceof Error ? error.message : 'Open Charge Map request failed.',
-      {
-        reason: 'upstream_unavailable',
-        retryable: true,
-        ...ctx.recoveryFor('upstream_unavailable'),
-      },
+      { reason: 'upstream_unavailable', retryable: true },
       { cause: error },
     );
   }
