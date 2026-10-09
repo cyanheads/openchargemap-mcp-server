@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.10](changelog/0.1.x/0.1.10.md) — 2026-10-08
+
+Adopts mcp-ts-core 0.13.14: tool errors carry their request ID, numeric strings and null optionals in find_stations and get_station arguments are repaired instead of rejected, and find_stations names the real openstreetmap_search_places geocoding tool. The Docker image installs dependencies in a build-platform deps stage on Bun 1.4.2.
+
 ## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-09-20 · ⚠️ Breaking · 🛡️ Security
 
 Adopts mcp-ts-core 0.13.6: argument rejections return InvalidParams with a recovery hint, sessionMode is declared in src/, and the skill tree moves to framework-skills/ so installing the plugin no longer leaks development skills. Carries the SSRF, ReDoS, and rate-limit-key security fixes; raises the Bun floor to >=1.4.0.
