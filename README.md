@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/openchargemap-mcp-server</h1>
-  <p><b>Find EV charging stations worldwide by location and connector via the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Find EV charging stations worldwide by location and connector from the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.</b>
   <div>4 Tools • 1 Resource</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.9-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/openchargemap-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/openchargemap-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/openchargemap-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.9-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/openchargemap-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/openchargemap-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/openchargemap-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -52,51 +52,37 @@ All station data is also reachable via the tools; the station corpus (~200k loca
 
 ### `openchargemap_find_stations` <sub>tool</sub>
 
-- Radius search (`latitude` + `longitude` + `distance`, in `KM` or `Miles`, max 500) or `boundingbox` — exactly one mode per call; a `boundingbox` sent alongside a stray `latitude` or `longitude` is rejected rather than resolved by dropping the extra coordinate
-- Optional country scope via ISO 3166-1 alpha-2 `countrycode` (global by default); filters for connector type, minimum power (kW), operator/network, usage type, charge level, operational status, and minimum charge points — all integer IDs, single or OR-matched arrays, resolved via `openchargemap_lookup_reference`
-- `maxresults` caps the page (default 25, max 200); OCM has no offset parameter of its own, so paging runs over an over-fetched candidate page and reachable depth is 500 stations per search (`offset` 0–499)
-- `totalCount` is exact only when the candidate page came back short of its cap — otherwise it's a floor, and the notice says which
-- Local filters (`minchargepoints`, and the drop of OCM's 0,0 coordinate sentinels) run over the whole candidate page, so a match ranked past `maxresults` is not lost
-- **Coordinate-native — does not geocode place names.** Resolve a place name to coordinates with a geocoding server (e.g. the `openstreetmap` MCP server's `openstreetmap_geocode`) first
+- Radius search (`latitude` + `longitude` + `distance`, `distanceUnit` `KM` or `Miles`, max 500) or `boundingbox` — exactly one mode per call; optional `countrycode` (ISO 3166-1 alpha-2) and filters `connectiontypeid`, `minpowerkw`, `operatorid`, `usagetypeid`, `levelid`, `statustypeid`, `minchargepoints` (the ID filters take one integer ID or an OR-matched array, resolved via `openchargemap_lookup_reference`)
+- `maxresults` caps the page (default 25, max 200) and `offset` pages through up to 500 stations per search; `totalCount` is exact only when OCM's candidate page came back short of its cap — otherwise it's a floor, and the `notice` says which
+- Fails with `invalid_location` (no search area, half a center, or a coordinate beside a `boundingbox`), `no_stations`, `auth_failed`, or `upstream_unavailable`
 
 ---
 
 ### `openchargemap_get_station` <sub>tool</sub>
 
-- Full detail for one station by its numeric OCM ID (fetched with `verbose=true`) — every connection (type, level, power, current, amperage, voltage, quantity), operator/network, usage and access restrictions, charge-point count, comments, usage cost, data provider, media, and verification recency
-- `includeComments` returns every check-in on record inline, unpaged — for a heavily-commented station, prefer `openchargemap_get_station_comments` instead
-- Computes a plain-prose `reliabilityNote` from observable facts (verification age, registry status, operational flag, fault-vs-positive check-in counts) — no synthetic score; omitted when status is fresh and uncontested
-- A status of "Temporarily Unavailable" or "Partly Operational (Mixed)" raises a caveat of its own, since OCM flags both as operational
-- Obtain an ID from `openchargemap_find_stations` — UUID lookup is not supported by the OCM API
+- Full record for one station by numeric OCM `id` — every connection, operator/network, usage and access rules, charge-point count, usage cost, data provider, media, and `dateLastVerified`; `includeComments` adds every check-in inline, unpaged (use `openchargemap_get_station_comments` for a heavily-commented station)
+- `reliabilityNote` is plain prose computed from observable facts (verification age, registry status, operational flag, fault-vs-positive check-ins), omitted when there is nothing to flag; fails with `not_found`, `auth_failed`, or `upstream_unavailable`
 
 ---
 
 ### `openchargemap_lookup_reference` <sub>tool</sub>
 
-- Categories: `connectiontypes`, `operators`, `usagetypes`, `statustypes`, `currenttypes`, `levels`, `countries` — served from a bundled snapshot, so it makes **no network call** (offline, instant)
-- Pass a `query` to resolve a name, title, code, or alias (`"CCS"`, `"Tesla Supercharger"`, `"France"`, `"FR"`), case-insensitive; omit it to browse the whole category (`limit` max 100, default 25), paged via `offset`/`nextOffset`
-- Returns the matching `id`(s) plus the `filterParam` they feed into `find_stations`
-- `source` is `live` or `bundled` alongside a `snapshotDate`; an optional startup refresh (`OPENCHARGEMAP_REFERENCE_REFRESH`) keeps the snapshot from drifting — on failure or when off, `source` stays `bundled`
+- `category` (`connectiontypes`, `operators`, `usagetypes`, `statustypes`, `currenttypes`, `levels`, `countries`) plus an optional case-insensitive `query` naming a title, code, or alias (`"CCS"`, `"Tesla Supercharger"`, `"FR"`); omit `query` to browse the category (`limit` max 100, default 25, paged via `offset`/`nextOffset`)
+- Returns the matching `id`(s), the `filterParam` they feed into `openchargemap_find_stations`, and `source` (`live` or `bundled`) with a `snapshotDate` — answered offline from the bundled snapshot unless `OPENCHARGEMAP_REFERENCE_REFRESH` refreshed it at startup; fails with `no_match`
 
 ---
 
 ### `openchargemap_get_station_comments` <sub>tool</sub>
 
-- Comments and fault reports with ratings, dates, and the recorded check-in outcome (`"Charged Successfully"`, `"Failed to Charge (Equipment Not Operational)"`, …), newest first — `maxresults` caps the page (default 25, max 100), paged via `offset`/`nextOffset`
-- `totalComments` is the station's whole set, not the page — `reliabilityNote`'s fault ratio is counted over that whole set so it doesn't move with `maxresults`
-- Surfaces the station's registry status, operational flag, and `dateLastVerified` alongside the comments, for spotting a mismatch like "listed operational, but recent check-ins report a fault"
-- An empty result (`comments: []`) is **not** an error — absence of reports is not evidence the charger works
-- Backed by the POI fetch with `includecomments=true` (OCM has no standalone comments endpoint), so the whole set is available without a further upstream call
-- Obtain a station ID from `openchargemap_find_stations`
+- Check-ins for one station by numeric OCM `id`, newest first, each with rating, date, and recorded outcome — `maxresults` caps the page (default 25, max 100), paged via `offset`/`nextOffset`; `totalComments` counts the station's whole set, and `reliabilityNote`'s fault ratio is computed over all of it
+- Returns the registry status, `isOperational`, and `dateLastVerified` beside the comments; an empty `comments: []` is not an error (no reports is not evidence the charger works); fails with `not_found`, `auth_failed`, or `upstream_unavailable`
 
 ---
 
 ### `openchargemap://station/{id}` <sub>resource</sub>
 
-- URI-addressable twin of `openchargemap_get_station` — full record for one station by numeric OCM ID, with community comments always included
-- Response cached for 600 seconds
-- Not listable — the station corpus isn't enumerable by URI; discover an ID with `openchargemap_find_stations`
-- `not_found` when the ID doesn't resolve to a station
+- Full record for one station by numeric OCM ID, community comments always included — the URI-addressable twin of `openchargemap_get_station`, cached for 600 seconds, and not listable
+- Fails with `not_found` when the ID doesn't resolve to a station
 
 ## Features
 
@@ -107,7 +93,8 @@ Open Charge Map-specific:
 - Type-safe client for the OCM v3 POI API with retry and session-scoped result caching
 - Reference data (connectors, operators, usage/status types, countries) bundled as an offline snapshot — name→ID resolution needs no live `/referencedata` call, with an optional startup refresh to prevent drift
 - Curated connector aliases (`CCS`, `NACS`/`Supercharger`, `J1772`, `Type 2`, `CHAdeMO`) so the names agents actually use resolve to the right IDs
-- Geocoding intentionally delegated — the server is coordinate-native and composes with any geocoding MCP server rather than rebuilding place-name lookup
+- Geocoding intentionally delegated — the server is coordinate-native and composes with any geocoding MCP server (e.g. the `openstreetmap` server's `openstreetmap_search_places`) rather than rebuilding place-name lookup
+- Stations are addressed by numeric OCM ID, discovered through `openchargemap_find_stations` — the OCM API has no UUID lookup
 
 Agent-friendly output:
 
@@ -244,6 +231,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend. | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) (spans, metrics, completion logs). | `false` |
 
