@@ -54,7 +54,7 @@ describe('openchargemap://station/{id}', () => {
     );
     expect(result.station.id).toBe(145452);
     expect(result.station.comments).toHaveLength(2);
-    expect(result.attribution).toContain('CC BY 4.0');
+    expect(result.attribution).toContain('License terms vary by provider');
     // The framework parses the handler return against `output` before it reaches the client, so a
     // shape the schema rejects is a failed read, not a lenient one.
     expect(stationResource.output?.safeParse(result).success).toBe(true);

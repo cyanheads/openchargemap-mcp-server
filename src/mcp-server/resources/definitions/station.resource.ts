@@ -34,7 +34,9 @@ export const stationResource = resource('openchargemap://station/{id}', {
       ),
     attribution: z
       .string()
-      .describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+      .describe(
+        'Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.',
+      ),
   }),
 
   errors: [

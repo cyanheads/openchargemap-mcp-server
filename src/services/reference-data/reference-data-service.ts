@@ -35,23 +35,23 @@ const FILTER_PARAM: Partial<Record<ReferenceCategory, string>> = {
  * Curated aliases for the connectors agents actually name → connection-type IDs, in priority order.
  * Each token resolves to one or more IDs; the first ID listed ranks first in results.
  */
-const CONNECTOR_ALIASES: Record<string, number[]> = {
-  j1772: [1],
-  'type 1': [1],
-  ccs: [33, 32],
-  'ccs type 2': [33],
-  'ccs type 1': [32],
-  'ccs combo': [33, 32],
-  combo: [33, 32],
-  supercharger: [27],
-  'tesla supercharger': [27],
-  nacs: [27],
-  'tesla nacs': [27],
-  'type 2': [25, 1036],
-  mennekes: [25, 1036],
-  chademo: [2],
-  chaoji: [1044],
-};
+const CONNECTOR_ALIASES = new Map<string, number[]>([
+  ['j1772', [1]],
+  ['type 1', [1]],
+  ['ccs', [33, 32]],
+  ['ccs type 2', [33]],
+  ['ccs type 1', [32]],
+  ['ccs combo', [33, 32]],
+  ['combo', [33, 32]],
+  ['supercharger', [27]],
+  ['tesla supercharger', [27]],
+  ['nacs', [27]],
+  ['tesla nacs', [27]],
+  ['type 2', [25, 1036]],
+  ['mennekes', [25, 1036]],
+  ['chademo', [2]],
+  ['chaoji', [1044]],
+]);
 
 /** OCM categories the live `/referencedata` response carries, mapped to this server's slugs. */
 const LIVE_CATEGORY_KEYS: Record<ReferenceCategory, string> = {
@@ -139,6 +139,14 @@ export class ReferenceDataService {
     return FILTER_PARAM[category];
   }
 
+  /** Whether the active bundled or refreshed countries index contains this ISO code. */
+  hasCountryCode(code: string): boolean {
+    const normalizedCode = code.toUpperCase();
+    return this.requireIndex('countries').entries.some(
+      (entry) => entry.ISOCode?.toUpperCase() === normalizedCode,
+    );
+  }
+
   /**
    * Resolve a query to matching reference entries within a category, best/exact first.
    * Strict normalized token match over the complete category set, plus curated connector aliases.
@@ -155,7 +163,7 @@ export class ReferenceDataService {
 
     // 1. Curated aliases (connection types only) take top priority.
     if (category === 'connectiontypes') {
-      const aliasIds = CONNECTOR_ALIASES[normalizedQuery];
+      const aliasIds = CONNECTOR_ALIASES.get(normalizedQuery);
       if (aliasIds) aliasIds.forEach((id, i) => void ranked.set(id, i));
     }
 

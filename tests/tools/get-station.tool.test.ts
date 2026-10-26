@@ -83,7 +83,7 @@ describe('openchargemap_get_station', () => {
     expect(result.station.usageCost).toBe('$0.30/kWh');
     expect(result.station.numberOfPoints).toBe(2);
     expect(result.station.media?.[0]?.url).toBe('https://example.com/photo.jpg');
-    expect(result.attribution).toContain('CC BY 4.0');
+    expect(result.attribution).toContain('License terms vary by provider');
     expect(result).toEqual(expect.schemaMatching(getStation.output));
   });
 
@@ -191,7 +191,7 @@ describe('openchargemap_get_station', () => {
     const text = (getStation.format!(result)[0] as { text: string }).text;
     expect(text).toContain('Usage cost: $0.30/kWh');
     expect(text).toContain('Reliability:');
-    expect(text).toContain('CC BY 4.0');
+    expect(text).toContain('License terms vary by provider');
   });
 
   it('omits comments from structured and text output when not requested', async () => {
@@ -311,7 +311,7 @@ describe('openchargemap_get_station', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/9
-  it('keeps information-free comments in the structured output but not in the text list', async () => {
+  it('keeps metadata-only comments on both output surfaces', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([BLANK_COMMENTS_POI]));
     const result = await getStation.handler(
       getStation.input.parse({ id: 71749, includeComments: true }),
@@ -320,7 +320,7 @@ describe('openchargemap_get_station', () => {
     const text = (getStation.format!(result)[0] as { text: string }).text;
 
     expect(result.station.comments).toHaveLength(3); // nothing deleted from structuredContent
-    expect(text).toContain('Comments: 3 on record, none carrying text');
-    expect(text).not.toContain('corscheg');
+    expect(text).toContain('Comments:');
+    expect(text.split('corscheg')).toHaveLength(4);
   });
 });

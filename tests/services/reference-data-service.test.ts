@@ -60,6 +60,8 @@ describe('ReferenceDataService', () => {
     expect(service.snapshotDate).toBe(REFERENCE_SNAPSHOT_DATE);
     expect(service.source).toBe('bundled');
     expect(service.labelFor('connectiontypes', 33)).toBe('CCS (Type 2)');
+    expect(service.hasCountryCode('Us')).toBe(true);
+    expect(service.hasCountryCode('zz')).toBe(false);
     expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -155,6 +157,8 @@ describe('ReferenceDataService', () => {
     expect(service.labelFor('connectiontypes', 9001)).toBe('Live Connector');
     expect(service.labelFor('operators', 9002)).toBe('Live Network');
     expect(service.labelFor('countries', 9007)).toBe('Live Country');
+    expect(service.hasCountryCode('lc')).toBe(true);
+    expect(service.hasCountryCode('US')).toBe(false);
     expect(fetchWithTimeout).toHaveBeenCalledOnce();
   });
 

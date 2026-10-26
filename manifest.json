@@ -22,7 +22,8 @@
         "MCP_AUTH_MODE": "none",
         "NODE_ENV": "production",
         "OPENCHARGEMAP_API_KEY": "${user_config.OPENCHARGEMAP_API_KEY}",
-        "OPENCHARGEMAP_REFERENCE_REFRESH": "${user_config.OPENCHARGEMAP_REFERENCE_REFRESH}"
+        "OPENCHARGEMAP_REFERENCE_REFRESH": "${user_config.OPENCHARGEMAP_REFERENCE_REFRESH}",
+        "OPENCHARGEMAP_CLAMP_LIMITS": "${user_config.OPENCHARGEMAP_CLAMP_LIMITS}"
       }
     }
   },
@@ -32,6 +33,12 @@
   "tools_generated": true,
   "prompts_generated": false,
   "user_config": {
+    "OPENCHARGEMAP_CLAMP_LIMITS": {
+      "type": "string",
+      "title": "Clamp Page Sizes",
+      "description": "Clamp oversized positive integer page sizes to the tool maximum; false restores rejection.",
+      "default": "true"
+    },
     "OPENCHARGEMAP_API_KEY": {
       "type": "string",
       "title": "Open Charge Map API Key",

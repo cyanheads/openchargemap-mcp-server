@@ -8,9 +8,9 @@
 
 import type { NormalizedComment } from './types.js';
 
-/** Mandatory CC BY 4.0 attribution, surfaced in every tool's output. */
+/** Source attribution, surfaced in every tool's output; license terms vary by provider. */
 export const ATTRIBUTION =
-  'Station data © Open Charge Map contributors, licensed under CC BY 4.0 (openchargemap.org).';
+  'Station data © Open Charge Map contributors and the providers named on each station (openchargemap.org). License terms vary by provider.';
 
 /** Months past which a listing's last-verified date is treated as a staleness caveat. */
 const STALE_MONTHS = 12;
@@ -113,8 +113,18 @@ export function buildReliabilityNote(input: {
   if (input.comments && input.comments.length > 0) {
     const faults = input.comments.filter(isFaultComment).length;
     if (faults > 0) {
+      const latestTimestamp = input.comments.reduce<number | undefined>((latest, comment) => {
+        const timestamp = comment.dateCreated ? Date.parse(comment.dateCreated) : Number.NaN;
+        return Number.isFinite(timestamp) && (latest === undefined || timestamp > latest)
+          ? timestamp
+          : latest;
+      }, undefined);
+      const latest =
+        latestTimestamp !== undefined
+          ? ` (latest comment ${new Date(latestTimestamp).toISOString().slice(0, 10)})`
+          : '';
       parts.push(
-        `${faults} of ${input.comments.length} recent comment(s) report a fault or a failed visit.`,
+        `${faults} of ${input.comments.length} comment(s) on record report a fault or a failed visit${latest}.`,
       );
     }
   }

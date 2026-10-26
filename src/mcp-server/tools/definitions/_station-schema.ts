@@ -7,7 +7,8 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { isFaultComment, statusAvailability } from '@/services/openchargemap/attribution.js';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { statusAvailability } from '@/services/openchargemap/attribution.js';
 
 /** Structured station address + coordinates. */
 export const AddressSchema = z
@@ -30,6 +31,16 @@ export const AddressSchema = z
 /** A single connector at a station. */
 export const ConnectionSchema = z
   .object({
+    statusTypeId: z
+      .number()
+      .optional()
+      .describe('Registry status ID for this connector; absent when no status ID is on record.'),
+    status: z.string().optional().describe('Registry status title for this connector.'),
+    isOperational: z
+      .boolean()
+      .optional()
+      .describe('Faithful registry operational flag for this connector; absent when unknown.'),
+    notes: z.string().optional().describe('Provider notes about this connector.'),
     connectionTypeId: z
       .number()
       .optional()
@@ -99,6 +110,14 @@ export type Comment = z.infer<typeof CommentSchema>;
 /** The core station shape shared by search results and detail. */
 export const StationSchema = z
   .object({
+    dataProviderLicense: z
+      .string()
+      .optional()
+      .describe('License terms supplied by the station data provider. Absent when unspecified.'),
+    isOpenDataLicensed: z
+      .boolean()
+      .optional()
+      .describe('Whether the provider marks its data as openly licensed. Absent when unknown.'),
     id: z.number().describe('OCM station ID.'),
     uuid: z
       .string()
@@ -246,14 +265,20 @@ function renderFlag(value: boolean | undefined, label: string): string | undefin
 
 /** Render one connection as a compact line covering every connection field. */
 function renderConnection(c: Station['connections'][number]): string {
-  const parts: string[] = [c.connectionType ?? 'Unknown connector'];
+  const parts: string[] = [escapeMarkdownInline(c.connectionType ?? 'Unknown connector')];
   if (c.connectionTypeId != null) parts.push(`typeId ${c.connectionTypeId}`);
-  if (c.level) parts.push(c.level);
+  if (c.level) parts.push(escapeMarkdownInline(c.level));
   if (c.levelId != null) parts.push(`levelId ${c.levelId}`);
   if (c.powerKW != null) parts.push(`${c.powerKW} kW`);
-  if (c.currentType) parts.push(c.currentType);
+  if (c.currentType) parts.push(escapeMarkdownInline(c.currentType));
   if (c.amps != null) parts.push(`${c.amps}A`);
   if (c.voltage != null) parts.push(`${c.voltage}V`);
+  if (c.statusTypeId !== undefined || c.status !== undefined || c.isOperational !== undefined) {
+    parts.push(
+      `Status: ${escapeMarkdownInline(c.status ?? 'Unknown')}${c.statusTypeId !== undefined ? ` (status id ${c.statusTypeId})` : ''} — ${renderOperationalText(c.statusTypeId, c.isOperational)}`,
+    );
+  }
+  if (c.notes) parts.push(`Notes: ${escapeMarkdownInline(c.notes)}`);
   const head = parts.join(' · ');
   return c.quantity != null ? `${head} ×${c.quantity}` : head;
 }
@@ -262,7 +287,9 @@ function renderConnection(c: Station['connections'][number]): string {
 export function renderStationBlock(s: Station): string {
   const lines: string[] = [];
   const dist = s.distance != null ? ` — ${s.distance.toFixed(2)} ${s.distanceUnit ?? 'KM'}` : '';
-  lines.push(`**${s.title}**${dist}  _(id ${s.id}, uuid ${s.uuid})_`);
+  lines.push(
+    `**${escapeMarkdownInline(s.title)}**${dist}  _(id ${s.id}, uuid ${escapeMarkdownInline(s.uuid)})_`,
+  );
 
   const addrBits = [
     s.address.line1,
@@ -274,14 +301,17 @@ export function renderStationBlock(s: Station): string {
   ]
     .filter(Boolean)
     .join(', ');
-  if (addrBits) lines.push(addrBits);
+  if (addrBits) lines.push(escapeMarkdownInline(addrBits));
   lines.push(`Coordinates: ${s.address.latitude}, ${s.address.longitude}`);
-  if (s.address.accessComments) lines.push(`Access: ${s.address.accessComments}`);
+  if (s.address.accessComments)
+    lines.push(`Access: ${escapeMarkdownInline(s.address.accessComments)}`);
 
   const opUsage: string[] = [];
   if (s.operator)
-    opUsage.push(`Operator: ${s.operator}${s.operatorId != null ? ` (id ${s.operatorId})` : ''}`);
-  if (s.usageType) opUsage.push(`Usage: ${s.usageType}`);
+    opUsage.push(
+      `Operator: ${escapeMarkdownInline(s.operator)}${s.operatorId != null ? ` (id ${s.operatorId})` : ''}`,
+    );
+  if (s.usageType) opUsage.push(`Usage: ${escapeMarkdownInline(s.usageType)}`);
   const accessFlags = [
     renderFlag(s.isPayAtLocation, 'pay at location'),
     renderFlag(s.isMembershipRequired, 'membership required'),
@@ -291,7 +321,12 @@ export function renderStationBlock(s: Station): string {
   if (opUsage.length) lines.push(opUsage.join(' · '));
 
   if (s.numberOfPoints != null) lines.push(`Charge points: ${s.numberOfPoints}`);
-  if (s.dataProvider) lines.push(`Data provider: ${s.dataProvider}`);
+  if (s.dataProvider) lines.push(`Data provider: ${escapeMarkdownInline(s.dataProvider)}`);
+  lines.push(
+    `Provider license: ${s.dataProviderLicense ? escapeMarkdownInline(s.dataProviderLicense) : 'unspecified'}`,
+  );
+  const openLicense = renderFlag(s.isOpenDataLicensed, 'open data licensed');
+  if (openLicense) lines.push(openLicense);
 
   if (s.connections.length > 0) {
     lines.push('Connections:');
@@ -311,10 +346,12 @@ export function renderStationBlock(s: Station): string {
  */
 function renderStatusLine(s: Station): string {
   const id = s.statusTypeId != null ? ` (status id ${s.statusTypeId})` : '';
-  const verified = s.dateLastVerified ? `last verified ${s.dateLastVerified}` : 'never verified';
+  const verified = s.dateLastVerified
+    ? `last verified ${escapeMarkdownInline(s.dateLastVerified)}`
+    : 'never verified';
   const recency = renderFlag(s.isRecentlyVerified, 'recently verified');
   const recencyText = recency ? ` (${recency})` : '';
-  return `Status: ${s.status ?? 'Unknown'}${id} — ${renderOperationalText(s.statusTypeId, s.isOperational)} · ${verified}${recencyText}`;
+  return `Status: ${escapeMarkdownInline(s.status ?? 'Unknown')}${id} — ${renderOperationalText(s.statusTypeId, s.isOperational)} · ${verified}${recencyText}`;
 }
 
 /**
@@ -341,30 +378,10 @@ export function renderOperationalText(
   }
 }
 
-/**
- * Split a comment list into the rows worth rendering and a count of those with nothing to say.
- * A row is worth rendering when it carries anything a reader can act on — text, a rating, a
- * check-in outcome, a link, or a problem report. What is left is a bare username and date, and OCM
- * has stations whose entire comment list is that shape, so text output names the count instead of
- * emitting a run of blank rows. Nothing is dropped from the structured output.
- */
-export function visibleComments(comments: Comment[]): { shown: Comment[]; omitted: number } {
-  const shown = comments.filter(
-    (c) =>
-      c.comment?.trim() ||
-      c.rating != null ||
-      c.checkinStatus ||
-      c.checkinStatusId != null ||
-      c.relatedUrl ||
-      isFaultComment(c),
-  );
-  return { shown, omitted: comments.length - shown.length };
-}
-
 /** Render one comment line, covering every comment field. */
 export function renderComment(c: Comment): string {
-  const date = c.dateCreated ? `[${c.dateCreated}] ` : '';
-  const user = c.user ?? 'anonymous';
+  const date = c.dateCreated ? `[${escapeMarkdownInline(c.dateCreated)}] ` : '';
+  const user = escapeMarkdownInline(c.user ?? 'anonymous');
   const checkin = c.checkinStatus
     ? `${c.checkinStatus}${c.checkinStatusId != null ? ` #${c.checkinStatusId}` : ''}`
     : undefined;
@@ -376,13 +393,18 @@ export function renderComment(c: Comment): string {
   ]
     .filter(Boolean)
     .join(', ');
-  const tag = meta ? ` (${meta})` : '';
+  const tag = meta ? ` (${escapeMarkdownInline(meta)})` : '';
   // Only open the colon when something follows it, or a check-in whose whole meaning is the
   // outcome renders as a line ending in a dangling separator. Commenters routinely paste the
   // same link inline AND into relatedUrl, so append it only when the text does not already
   // carry it — otherwise the rendered line ends in the URL twice.
   const text = c.comment?.trim();
   const link = c.relatedUrl && !text?.includes(c.relatedUrl) ? c.relatedUrl : undefined;
-  const body = [text, link].filter(Boolean).join(' ');
+  const body = [
+    text ? escapeMarkdownInline(text) : undefined,
+    link ? markdownLink(link, link) : undefined,
+  ]
+    .filter(Boolean)
+    .join(' ');
   return `${date}${user}${tag}${body ? `: ${body}` : ''}`;
 }

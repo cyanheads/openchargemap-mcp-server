@@ -1,11 +1,10 @@
 /**
  * @fileoverview Tests for openchargemap_lookup_reference — offline resolution from the bundled
  * snapshot: alias resolution (the headline goal), exact + token matching, browse + truncation, the
- * filterParam mapping, and the no_match contract error. No network.
+ * filterParam mapping, and empty-query recovery. No network.
  * @module tests/tools/lookup-reference.tool.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { lookupReference } from '@/mcp-server/tools/definitions/lookup-reference.tool.js';
@@ -29,7 +28,7 @@ describe('openchargemap_lookup_reference', () => {
     ['unknown category', { category: 'networks' }],
     ['empty query', { category: 'operators', query: '' }],
     ['zero limit', { category: 'operators', limit: 0 }],
-    ['limit above maximum', { category: 'operators', limit: 101 }],
+    ['negative limit', { category: 'operators', limit: -1 }],
     ['fractional limit', { category: 'operators', limit: 1.5 }],
   ])('rejects %s at the Zod boundary', (_label, input) => {
     expect(() => lookupReference.input.parse(input)).toThrow();
@@ -255,19 +254,12 @@ describe('openchargemap_lookup_reference', () => {
     expect(result.filterParam).toBe(expected);
   });
 
-  it('throws no_match for an unresolvable query', () => {
-    // Handler is synchronous, so it throws rather than rejecting.
-    const call = () =>
-      lookupReference.handler(
-        lookupReference.input.parse({ category: 'connectiontypes', query: 'zzzznotaconnector' }),
-        ctx(),
-      );
-    expect(call).toThrow();
-    try {
-      call();
-    } catch (err) {
-      expect(err).toMatchObject({ code: JsonRpcErrorCode.NotFound, data: { reason: 'no_match' } });
-    }
+  it('returns empty matches for an unresolvable query', async () => {
+    const result = await lookupReference.handler(
+      lookupReference.input.parse({ category: 'connectiontypes', query: 'zzzznotaconnector' }),
+      ctx(),
+    );
+    expect(result.matches).toEqual([]);
   });
 
   it('format() renders ids, titles, and the filter-param guidance', async () => {
@@ -278,19 +270,17 @@ describe('openchargemap_lookup_reference', () => {
     const text = (lookupReference.format!(result)[0] as { text: string }).text;
     expect(text).toContain('CHAdeMO');
     expect(text).toContain('connectiontypeid');
-    expect(text).toContain('CC BY 4.0');
+    expect(text).toContain('License terms vary by provider');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/12
-  it('does not write unreachable enrichment immediately before no_match', () => {
+  it('writes recovery enrichment for an empty successful query', async () => {
     const c = ctx();
-    expect(() =>
-      lookupReference.handler(
-        lookupReference.input.parse({ category: 'operators', query: 'zzzznotanetwork' }),
-        c,
-      ),
-    ).toThrow();
-    expect(getEnrichment(c)).not.toHaveProperty('notice');
+    await lookupReference.handler(
+      lookupReference.input.parse({ category: 'operators', query: 'zzzznotanetwork' }),
+      c,
+    );
+    expect(getEnrichment(c).notice).toContain('zzzznotanetwork');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/10

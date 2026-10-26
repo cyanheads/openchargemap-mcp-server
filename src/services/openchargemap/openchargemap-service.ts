@@ -34,32 +34,11 @@ import type {
 const CACHE_TTL_SECONDS = 600;
 
 /**
- * The deepest window `searchPois` can serve, and the largest page it will ask OCM for. Bounded
+ * The deepest candidate pool `searchPois` can serve; one extra record detects an upstream remainder. Bounded
  * because OCM has no offset parameter — the whole reachable set has to come back in one response —
  * and because response time past this size grows unreliable against the 15s fetch timeout.
  */
 export const MAX_SEARCH_WINDOW = 500;
-
-/**
- * Candidate-page sizes `searchPois` may request from OCM, smallest first. The upstream page is
- * sized from this ladder rather than from the caller's window, for two reasons: the local filters
- * (`hasUsableCoordinates`, `meetsMinChargePoints`) then select from a wider pool than the caller
- * asked for, and every window quantizing to the same rung reads one cache entry instead of
- * re-fetching. Quantized rather than computed so nearby windows share that entry — OCM serves a
- * larger `maxresults` as the same ordered prefix, so a step up the ladder is a superset of the
- * rung below it. A window that outgrows its rung does fetch again, one rung wider: paging a default
- * 25-station page costs a fetch at offset 0, 25, and 50, then rides the cached top rung.
- */
-const CANDIDATE_PAGE_SIZES = [100, 250, MAX_SEARCH_WINDOW] as const;
-
-/** Candidate records fetched per match the caller needs, leaving the local filters room to drop rows. */
-const CANDIDATE_OVERFETCH = 4;
-
-/** Smallest candidate page that covers the caller's window with room for local filtering. */
-function candidatePageSize(window: number): number {
-  const wanted = window * CANDIDATE_OVERFETCH;
-  return CANDIDATE_PAGE_SIZES.find((size) => size >= wanted) ?? MAX_SEARCH_WINDOW;
-}
 
 /** Map the OCM integer distance-unit enum to a string. */
 function distanceUnitLabel(raw: number | null | undefined): 'KM' | 'Miles' | undefined {
@@ -136,32 +115,37 @@ export class OpenChargeMapService {
   /**
    * Search POIs by radius or bounding box with optional filters (`verbose=false`), returning the
    * whole candidate page the local filters left, ordered by distance — the caller slices its own
-   * window out of it. Cached per filter set and candidate-page size (not per window) in
-   * `ctx.state`, so every window that quantizes to the same rung of {@link CANDIDATE_PAGE_SIZES}
-   * shares one upstream fetch, and a window that outgrows its rung fetches the next one up.
+   * window out of it. One fixed 500-candidate pool per filter set is cached in `ctx.state`,
+   * independently of page size and offset. A 501st raw record only proves an upstream remainder.
    */
   async searchPois(params: SearchPoiParams, ctx: Context): Promise<SearchPoiResult> {
-    const candidateCap = candidatePageSize(params.window);
+    const candidateCap = MAX_SEARCH_WINDOW;
     // The window is deliberately absent from the key — every window over the same search and
     // candidate page reads one cache entry. `JSON.stringify` drops the undefined.
-    const key = cacheKey('search', { ...params, window: undefined, candidateCap });
+    const key = cacheKey('search-v2', { ...params, window: undefined, candidateCap });
     const cached = await ctx.state.get<SearchPoiResult>(key);
     if (cached) {
       ctx.log.debug('OCM search cache hit', { key });
       return cached;
     }
 
-    const url = this.buildSearchUrl(params, candidateCap);
+    const url = this.buildSearchUrl(params, candidateCap + 1);
     const raw = await this.fetchPois(url, 'searchPois', ctx);
     // Search-only response filters (getPoi keeps everything): drop unusable-coordinate POIs on the
     // RAW address before normalization's `?? 0` erases the 0,0-vs-missing distinction, then honor the
     // minchargepoints contract locally since OCM's minnumberofpoints param is inert. Both run over
     // the full candidate page, so a match ranked past the caller's window is not lost to the cap.
     const matches = raw
+      .slice(0, candidateCap)
       .filter(hasUsableCoordinates)
       .map((poi) => this.normalizeStation(poi))
       .filter((station) => meetsMinChargePoints(station, params.minchargepoints));
-    const result: SearchPoiResult = { candidateCap, fetched: raw.length, matches };
+    const result: SearchPoiResult = {
+      candidateCap,
+      fetched: Math.min(raw.length, candidateCap),
+      moreUpstream: raw.length > candidateCap,
+      matches,
+    };
     await ctx.state.set(key, result, { ttl: CACHE_TTL_SECONDS });
     return result;
   }
@@ -382,6 +366,12 @@ export class OpenChargeMapService {
         ? { isRecentlyVerified: poi.IsRecentlyVerified }
         : {}),
       ...(poi.DataProvider?.Title ? { dataProvider: poi.DataProvider.Title } : {}),
+      ...(poi.DataProvider?.License?.trim()
+        ? { dataProviderLicense: poi.DataProvider.License.trim() }
+        : {}),
+      ...(typeof poi.DataProvider?.IsOpenDataLicensed === 'boolean'
+        ? { isOpenDataLicensed: poi.DataProvider.IsOpenDataLicensed }
+        : {}),
     };
 
     // Backfill operator/usage/status titles from reference data when OCM left them off but gave an ID.
@@ -418,6 +408,16 @@ export class OpenChargeMapService {
 
   private normalizeConnection(c: RawConnection): NormalizedConnection {
     return {
+      ...(typeof c.StatusType?.ID === 'number'
+        ? { statusTypeId: c.StatusType.ID }
+        : typeof c.StatusTypeID === 'number'
+          ? { statusTypeId: c.StatusTypeID }
+          : {}),
+      ...(c.StatusType?.Title ? { status: c.StatusType.Title } : {}),
+      ...(typeof c.StatusType?.IsOperational === 'boolean'
+        ? { isOperational: c.StatusType.IsOperational }
+        : {}),
+      ...(c.Comments?.trim() ? { notes: c.Comments.trim() } : {}),
       ...(typeof c.ConnectionTypeID === 'number' ? { connectionTypeId: c.ConnectionTypeID } : {}),
       ...(c.ConnectionType?.Title ? { connectionType: c.ConnectionType.Title } : {}),
       ...(c.Level?.Title ? { level: c.Level.Title } : {}),

@@ -6,6 +6,7 @@
  * @module index
  */
 
+import { fileURLToPath } from 'node:url';
 import { createApp } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from './config/server-config.js';
 import { stationResource } from './mcp-server/resources/definitions/station.resource.js';
@@ -26,13 +27,9 @@ await createApp({
   sessionMode: 'stateless',
   tools: [findStations, getStation, lookupReference, getStationComments],
   resources: [stationResource],
+  skills: fileURLToPath(new URL('../skills/', import.meta.url)),
   instructions:
-    'Global EV charging station search over Open Charge Map. Coordinate-native — geocode place ' +
-    'names with the openstreetmap server first, then pass coordinates here. Resolve connector/' +
-    'network names to filter IDs with openchargemap_lookup_reference. Registry status is operator-' +
-    'reported and can be stale — corroborate with dateLastVerified and openchargemap_get_station_comments. ' +
-    'All station data is © Open Charge Map contributors, licensed under CC BY 4.0 (openchargemap.org); ' +
-    'attribution is required in any downstream use.',
+    'Global EV charging station search over Open Charge Map. Coordinate-native — geocode place names with the openstreetmap server first, then pass coordinates here. Resolve connector/network names to filter IDs with openchargemap_lookup_reference. Registry status is operator-reported and can be stale — corroborate with dateLastVerified and openchargemap_get_station_comments. Station data is © Open Charge Map contributors and the providers named on each station (openchargemap.org). License terms vary by provider; preserve attribution and consult each station provider’s license terms.',
   async setup() {
     const serverConfig = getServerConfig();
     await initReferenceDataService(serverConfig);

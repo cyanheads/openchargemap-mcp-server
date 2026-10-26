@@ -7,7 +7,7 @@
  * refresh (`OPENCHARGEMAP_REFERENCE_REFRESH`) replaces this in memory when enabled; on any
  * refresh failure the bundled snapshot below is retained. Captured live from the OCM v3 API.
  *
- * Data © Open Charge Map contributors, licensed under CC BY 4.0 (openchargemap.org).
+ * Data © Open Charge Map contributors and station data providers (openchargemap.org); license terms vary by provider.
  * @module data/ocm-reference-data
  */
 

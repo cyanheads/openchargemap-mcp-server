@@ -7,7 +7,7 @@
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
 | `openchargemap_find_stations` | The workhorse. Find EV charging stations near a point (lat/long + distance) or within a bounding box, optionally scoped to a country. Filter by connector type, minimum power, operator/network, usage (public/free/membership), operational status, and minimum charge points. Coordinate-native — geocode a place name with `openstreetmap_search_places` first. Returns each station's title, address, distance, connections (type/power/count), operator, access, operational status, and last-verified date. | `latitude`+`longitude`+`distance` OR `boundingbox`; `countrycode?`, `connectiontypeid?`, `minpowerkw?`, `operatorid?`, `usagetypeid?`, `levelid?`, `statustypeid?`, `minchargepoints?`, `maxresults?` | `readOnlyHint: true`, `openWorldHint: true` |
-| `openchargemap_get_station` | Full detail for one station by OCM numeric ID: every connection (type, level, power, current, quantity, status), operator + network, usage restrictions (pay/membership/access key), number of points, general comments, usage cost, data provider, media, and verification recency. Includes community check-ins inline. | `id` (numeric OCM ID); `includecomments?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
+| `openchargemap_get_station` | Full detail for one station by OCM numeric ID: every connection (type, level, power, current, quantity, status), operator + network, usage restrictions (pay/membership/access key), number of points, general comments, usage cost, data provider, media, and verification recency. Includes community check-ins inline when requested. | `id` (numeric OCM ID); `includeComments?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `openchargemap_lookup_reference` | Resolve Open Charge Map reference data → the integer IDs `find_stations` filters require. Turns "CCS", "CHAdeMO", "Tesla Supercharger", "Type 2", an operator name ("ChargePoint", "Tesla"), a usage type, a status, a current type, or a country name/code into its `connectiontypeid` / `operatorid` / `usagetypeid` / etc. Bundled and cached — offline, no network round trip. Browse a full category with no query. | `category` (enum), `query?` (name/code to resolve), `limit?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 | `openchargemap_get_station_comments` | Community check-ins and comments for one station — the honest reliability signal. Returns user-reported comments and fault reports with ratings and dates, plus the station's registry operational status and last-verified date so an agent can flag "listed operational, but recent check-ins report a fault." | `id` (numeric OCM ID); `maxresults?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 
@@ -16,6 +16,7 @@
 | URI Template | Description | Pagination |
 |:-------------|:------------|:-----------|
 | `openchargemap://station/{id}` | Full station record by OCM numeric ID — the resource twin of `openchargemap_get_station`. | None — single record |
+| `skill://openchargemap-guide/SKILL.md` | Charger recommendation, reliability, and coverage workflow guide, also discoverable through the MCP Skills extension. | None — one guide |
 
 Resources are supplementary. All data is fully reachable through tools — the resource is a convenience for clients that support injectable context by stable URI. Reference data is **not** exposed as a resource (it is a query/resolve surface, not a stable-by-URI record; `openchargemap_lookup_reference` covers it).
 
@@ -29,11 +30,11 @@ None. The surface is find / detail / resolve — data-and-lookup oriented, no re
 
 Global electric-vehicle charging as one find-and-detail server over **Open Charge Map** (OCM) — the community-maintained, nonprofit registry of public charging stations worldwide (~200k+ locations across Europe, North America, Asia, and Oceania). Find chargers near a point or within a region, filtered by connector, power, and network; pull full station detail; resolve the connector/operator reference data those filters key on; and read community check-ins for real-world reliability.
 
-A companion `openstreetmap` MCP server already covers geocoding and places, but nothing covers the EV-charging layer that rides on top of it. OCM is the canonical open registry — global, crowd-verified, CC BY 4.0 — and "where can I charge near here, with the right connector, that actually works" is a real, recurring query. It composes directly with `openstreetmap` (geocode a place → coordinate search).
+A companion `openstreetmap` MCP server already covers geocoding and places, but nothing covers the EV-charging layer that rides on top of it. OCM is a global, community-maintained registry with provider-specific license terms, and "where can I charge near here, with the right connector, that actually works" is a real, recurring query. It composes directly with `openstreetmap` (geocode a place → coordinate search).
 
 **Audience:** EV drivers and trip-planning assistants, mobility and fleet-management tooling, mapping and travel agents — anyone resolving "nearest working charger for this car" anywhere in the world.
 
-**Scope:** Read-only v1. Global by default — country is an optional filter, never a hardcoded default. No DataCanvas (find/detail/resolve surface, not analytical rows). Attribution (CC BY 4.0) mandatory.
+**Scope:** Read-only v1. Global by default — country is an optional filter, never a hardcoded default. No DataCanvas (find/detail/resolve surface, not analytical rows). Preserve contributor and provider attribution and expose per-provider license terms.
 
 ---
 
@@ -47,7 +48,7 @@ A companion `openstreetmap` MCP server already covers geocoding and places, but 
 - **Auth:** OCM requires an `X-API-Key` request header on every endpoint (`/poi`, `/referencedata`). Key is free (instant signup). A missing or invalid key returns **HTTP 403**.
 - **Rate limits:** generous community limits, no hard published number — be polite: cache reference data, default `maxresults` modestly, enforce session-level caching in the service.
 - **Global coverage**, read-only, no writes (OCM accepts POI/comment submissions but writes need moderation and add little agent value → deferred).
-- **Attribution:** CC BY 4.0. Credit "Open Charge Map" + contributors in README and in every tool's output metadata (`attribution` field).
+- **Attribution:** Credit Open Charge Map contributors and the providers named on each station in README and every tool's output metadata (`attribution` field). License terms vary by provider.
 
 ---
 
@@ -76,6 +77,7 @@ Reference sets are small and bounded (measured live: ConnectionTypes 43, Operato
 | `OPENCHARGEMAP_API_KEY` | **Yes** | OCM API key, sent as the `X-API-Key` header on every request. Free instant signup at openchargemap.org. Startup fails fast with a `ConfigurationError` banner if unset. |
 | `OPENCHARGEMAP_BASE_URL` | No | Override the OCM API base (default `https://api.openchargemap.io/v3`). For a private mirror or testing. |
 | `OPENCHARGEMAP_REFERENCE_REFRESH` | No | `z.stringbool()`, default `false`. When `true`, refresh reference data from `/v3/referencedata` at startup, falling back to the bundled snapshot on failure. When `false`, use the bundled snapshot only (fully offline). |
+| `OPENCHARGEMAP_CLAMP_LIMITS` | No | `z.stringbool()`, default `true`. Clamp oversized positive integer page sizes to 200 stations or 100 comments/reference entries. `false` restores rejection. Each clamp emits one notice, log and `openchargemap.pagination.clamps` increment with bounded tool/parameter labels. |
 
 `server-config.ts` is a lazy-parsed Zod schema separate from framework config; `parseEnvConfig` maps schema paths → env var names so errors name `OPENCHARGEMAP_API_KEY`, not `apiKey`. Use `z.stringbool()` for the boolean (never `z.coerce.boolean()`).
 
@@ -85,7 +87,7 @@ Reference sets are small and bounded (measured live: ConnectionTypes 43, Operato
 
 ## Implementation Order
 
-1. **Config + server setup** — `server-config.ts` with the three env vars; wire `createApp({ name: 'openchargemap-mcp-server', title: 'openchargemap-mcp-server', websiteUrl: '<repo>', tools: […] })`. Do **not** pass `description`/`websiteUrl` duplicates of package.json into the identity block beyond `websiteUrl`; `description` derives from package.json.
+1. **Config + server setup** — `server-config.ts` with the server-specific env vars; wire `createApp({ name: 'openchargemap-mcp-server', title: 'openchargemap-mcp-server', websiteUrl: '<repo>', tools: […] })`. Do **not** pass `description`/`websiteUrl` duplicates of package.json into the identity block beyond `websiteUrl`; `description` derives from package.json.
 2. **`src/data/ocm-reference-data.ts`** — bundled reference snapshot (TS const) + a `REFERENCE_SNAPSHOT_DATE` marker.
 3. **`ReferenceDataService`** — load snapshot, build indices, optional startup refresh.
 4. **`OpenChargeMapService`** — HTTP client, retry, session cache, response normalization.
@@ -106,7 +108,7 @@ Each step is independently testable. Tests must include at least one sparse-payl
 The workhorse. Wraps `GET /v3/poi`. Coordinate-native; place names geocode through `openstreetmap_search_places` first (documented in the description, not implemented here).
 
 **Description (final):**
-> Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (`latitude` + `longitude` + `distance`) or a `boundingbox`; optionally scope to a country with `countrycode`. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with `openstreetmap_search_places` first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with `openchargemap_lookup_reference` (e.g. "CCS" → 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date — treat an old `dateLastVerified` or a non-operational status as a reliability caveat.
+> Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (`latitude` + `longitude` + `distance`) or a `boundingbox`; optionally scope to a country with `countrycode`. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with `openstreetmap_search_places` first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its IDs with `openchargemap_lookup_reference` and pass every returned ID (e.g. "CCS" → [32, 33]; Open Charge Map distinguishes CCS Type 1 (32, common in North America) and Type 2 (33, common in Europe); 33 alone can miss Type 1 stations). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date — treat an old `dateLastVerified` or a non-operational status as a reliability caveat.
 
 **Input:**
 
@@ -131,24 +133,24 @@ z.object({
 
   // --- Scope + filters (all optional; integer IDs resolve via openchargemap_lookup_reference) ---
   countrycode: z.string().length(2).regex(/^[A-Za-z]{2}$/).optional()
-    .describe('Restrict to one country by ISO 3166-1 alpha-2 code (e.g. "US", "FR", "GB"). Omit for a global search. The server is global by default — there is no implicit country.'),
-  connectiontypeid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).max(10)]).optional()
-    .describe('Connector type ID, or an array of IDs (OR-matched). Resolve names with openchargemap_lookup_reference — e.g. CCS (Type 2)=33, CHAdeMO=2, NACS/Tesla Supercharger=27, Type 2 socket=25, Type 1/J1772=1.'),
+    .describe('Restrict to one country by ISO 3166-1 alpha-2 code (e.g. "US", "FR", "GB"). Omit for a global search. Unrecognized codes are not applied; the summary and notice disclose the unrestricted search. Resolve valid codes with openchargemap_lookup_reference (countries).'),
+  connectiontypeid: z.union([z.number().int().min(0), z.array(z.number().int().min(0)).min(1).max(10)]).optional()
+    .describe('Connector type ID, or an array of IDs (OR-matched). Resolve names with openchargemap_lookup_reference — e.g. CCS is two IDs, 32 (Type 1, North America) and 33 (Type 2, Europe and most other regions), so pass [32, 33] when the region is unknown; CHAdeMO=2, NACS/Tesla Supercharger=27, Type 2 socket=25, Type 1/J1772=1.'),
   minpowerkw: z.number().positive().max(1000).optional()
     .describe('Minimum charging power in kW across any connection at the station. Use ~50 for DC fast charging, ~150 for high-power DC. Stations whose fastest connection is below this are excluded.'),
-  operatorid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).max(10)]).optional()
+  operatorid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).min(1).max(10)]).optional()
     .describe('Operator/network ID, or array of IDs (OR-matched). Resolve a network name with openchargemap_lookup_reference (category "operators") — e.g. "Tesla", "ChargePoint".'),
-  usagetypeid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).max(10)]).optional()
+  usagetypeid: z.union([z.number().int().min(0), z.array(z.number().int().min(0)).min(1).max(10)]).optional()
     .describe('Usage/access type ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category "usagetypes") — e.g. Public=1, Public-Pay At Location=5, Public-Membership Required=4.'),
-  levelid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).max(3)]).optional()
+  levelid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).min(1).max(3)]).optional()
     .describe('Charge level ID (1=Low <2kW, 2=Medium >2kW, 3=High >40kW/fast). Array OR-matched. Use 3 as a coarse "fast charging only" filter when a specific connector is not required.'),
-  statustypeid: z.union([z.number().int().positive(), z.array(z.number().int().positive()).max(10)]).optional()
+  statustypeid: z.union([z.number().int().min(0), z.array(z.number().int().min(0)).min(1).max(10)]).optional()
     .describe('Registry operational-status ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category "statustypes"). NOTE: registry status is operator-reported and can be stale — combine with dateLastVerified and openchargemap_get_station_comments to judge real-world reliability, do not treat it as ground truth.'),
   minchargepoints: z.number().int().positive().optional()
     .describe('Minimum number of charge points (stalls) at the station. Filters out single-point locations when you need a station likely to have an open stall.'),
 
-  maxresults: z.number().int().min(1).max(200).default(25)
-    .describe('Maximum stations to return, ordered by distance from the search point. Max 200. Larger values cost more payload and upstream load — prefer tightening filters over raising this.'),
+  maxresults: pageLimitSchema(200).default(25)
+    .describe('Maximum stations to return, ordered by distance from the search point. Max 200; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.'),
 })
 ```
 
@@ -199,7 +201,7 @@ z.object({
   })).describe('Matching stations, ordered by distance from the search point.'),
   totalCount: z.number().describe('Number of stations returned. Equals maxresults when the cap was hit — see truncated.'),
   searchSummary: z.string().describe('Human-readable echo of the resolved search: location mode, scope, and active filters as the server applied them.'),
-  attribution: z.string().describe('Required attribution: "Station data © Open Charge Map contributors, licensed under CC BY 4.0 (openchargemap.org)."'),
+  attribution: z.string().describe('Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.'),
 })
 ```
 
@@ -214,9 +216,6 @@ errors: [
   { reason: 'invalid_location', code: JsonRpcErrorCode.InvalidParams,
     when: 'No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude',
     recovery: 'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_search_places to obtain coordinates.' },
-  { reason: 'no_stations', code: JsonRpcErrorCode.NotFound,
-    when: 'Open Charge Map holds no station for the search area and filters — either it returned nothing at all, or every station it returned was ruled out and there were no further candidates',
-    recovery: 'Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.' },
   { reason: 'upstream_unavailable', code: JsonRpcErrorCode.ServiceUnavailable, retryable: true,
     when: 'OCM returned a non-2xx response or timed out',
     recovery: 'Retry after a short delay. If it persists, OCM may be rate-limiting or down — reduce call frequency.' },
@@ -271,8 +270,8 @@ z.object({
       dateCreated: z.string().optional().describe('ISO 8601 timestamp the comment was posted.'),
     })).optional().describe('Community check-ins, present only when includeComments=true. Empty array means none on record.'),
   }).describe('The full station record.'),
-  reliabilityNote: z.string().optional().describe('Server-computed caveat when registry status and recency suggest the listing may not reflect reality (e.g. "Listed operational but last verified 14 months ago; 2 of 3 recent comments report a fault."). Omitted when status is fresh and uncontested.'),
-  attribution: z.string().describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+  reliabilityNote: z.string().optional().describe('Server-computed caveat when registry status and verification age suggest the listing may not reflect reality (e.g. "2 of 3 comment(s) on record report a fault or a failed visit (latest comment 2015-04-02)."). Fault counts and latest parseable comment date span the full history, independent of paging. Omitted when there is nothing to flag.'),
+  attribution: z.string().describe('Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.'),
 })
 ```
 
@@ -303,7 +302,7 @@ errors: [
 The DX layer. Resolves friendly names to the integer filter IDs `find_stations` needs, served from the bundled/cached reference snapshot — **no network round trip** (`openWorldHint: false`). Also browses a full category when `query` is omitted. This is the bounded-set, name→opaque-ID resolver pattern (MCP-side list filtering): strict token match over the full category, no fuzzy library for the default path.
 
 **Description (final):**
-> Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" → a connectiontypeid, "ChargePoint" → an operatorid, "Public - Pay At Location" → a usagetypeid, "France" or "FR" → a country. Omit the query to browse the whole category. Served from a bundled snapshot — offline and instant. Use the returned id(s) in openchargemap_find_stations.
+> Resolve Open Charge Map reference data to the integer IDs that openchargemap_find_stations filters require. Pick a category and pass a name or code to resolve — "CCS" or "Tesla Supercharger" → a connectiontypeid, "ChargePoint" → an operatorid, "Public - Pay At Location" → a usagetypeid, "France" or "FR" → a country. A connector name can resolve to several regional variants ("CCS" matches CCS Type 2 = 33 and CCS Type 1 = 32, the North American form) — pass every returned ID to find_stations as an array, not just the first. Omit the query to browse the whole category. Served from a bundled snapshot — offline and instant. Use the returned id(s) in openchargemap_find_stations.
 
 **Input:**
 
@@ -320,8 +319,8 @@ z.object({
   ]).describe('Which reference set to query. connectiontypes → connectiontypeid; operators → operatorid; usagetypes → usagetypeid; statustypes → statustypeid; currenttypes → current type; levels → charge level (1/2/3); countries → ISO country.'),
   query: z.string().min(1).optional()
     .describe('Name, title, code, or alias to resolve (e.g. "CCS", "CHAdeMO", "Tesla", "Public", "France", "FR"). Case-insensitive, matches on title, formal name, and known aliases. Omit to browse the entire category.'),
-  limit: z.number().int().min(1).max(100).default(25)
-    .describe('Maximum entries to return when browsing or when a query matches several. Max 100.'),
+  limit: pageLimitSchema(100).default(25)
+    .describe('Maximum entries to return when browsing or when a query matches several. Max 100; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.'),
 })
 ```
 
@@ -341,7 +340,7 @@ z.object({
   filterParam: z.string().optional().describe('The find_stations input parameter these IDs feed (e.g. "connectiontypeid", "operatorid"). Omitted for categories with no direct filter (currenttypes, countries→use countrycode).'),
   snapshotDate: z.string().describe('Date the reference data in this response was captured — the day the live refresh ran when source is "live", the bundled snapshot\'s own capture date when it is "bundled".'),
   source: z.enum(['live', 'bundled']).describe('Where these entries came from: a successful startup refresh, or the snapshot shipped with the server.'),
-  attribution: z.string().describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+  attribution: z.string().describe('Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.'),
 })
 ```
 
@@ -349,15 +348,7 @@ z.object({
 
 **Matching:** normalize (lowercase, strip punctuation/diacritics) and require every query token to appear in title / formal name / alias, over the **complete** category set (not a page). Curated aliases for the connectors agents actually name: `J1772`→Type 1 (1), `CCS`→both CCS (32, 33) with CCS Type 2 (33) ranked first, `Supercharger`/`NACS`→27, `Type 2`→25/1036. No fuzzy fallback in v1 — on empty match, return zero matches with a recovery that says "browse the category with no query."
 
-**Errors:**
-
-```ts
-errors: [
-  { reason: 'no_match', code: JsonRpcErrorCode.NotFound,
-    when: 'No reference entry in the category matched the query',
-    recovery: 'Check spelling, try a shorter/more common term (e.g. "CCS" not "Combined Charging System"), or omit query to browse the whole category and pick the id.' },
-]
-```
+**Empty results:** success with `matches: []`, `totalCount: 0` and a notice echoing the query and suggesting spelling checks or browsing the category.
 
 **Annotations:** `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` (no external call — bundled data).
 
@@ -378,8 +369,8 @@ Community check-ins for one station — the honest reliability signal beyond the
 z.object({
   id: z.number().int().positive()
     .describe('Numeric OCM station ID. Get one from openchargemap_find_stations. Note: UUID lookup is not supported by the OCM API.'),
-  maxresults: z.number().int().min(1).max(100).default(25)
-    .describe('Maximum comments to return (handler trims, newest first). The OCM API returns all embedded comments — this caps what the tool surfaces. Max 100.'),
+  maxresults: pageLimitSchema(100).default(25)
+    .describe('Maximum comments to return, newest first. Max 100; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.'),
 })
 ```
 
@@ -401,7 +392,7 @@ z.object({
   })).describe('Community comments, newest first. Empty array means OCM has no check-ins for this station — absence of reports is not evidence the charger works.'),
   totalCount: z.number().describe('Number of comments returned.'),
   reliabilityNote: z.string().optional().describe('Server-computed caveat when status and comments disagree or the listing is stale (plain prose from observable facts; no synthetic score). Omitted when nothing to flag.'),
-  attribution: z.string().describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+  attribution: z.string().describe('Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.'),
 })
 ```
 
@@ -430,6 +421,10 @@ errors: [
 ---
 
 ## Resources
+
+### `skill://openchargemap-guide/SKILL.md`
+
+The published guide combines connector and access checks, dated reliability evidence, and coverage gates into charger-selection workflows. It ships under root `skills/` and is served through the MCP Skills extension. Its filesystem path is anchored to the installed entry point so a client's working directory cannot redirect skill loading.
 
 ### `openchargemap://station/{id}`
 
@@ -468,8 +463,8 @@ OCM v3 has two endpoints this server uses; reference data is bundled.
 | # | Tool | Purpose |
 |:--|:-----|:--------|
 | 1 | `openstreetmap_search_places` (openstreetmap server) | "Ballard, Seattle" → `{lat: 47.6685, lon: -122.387}` |
-| 2 | `openchargemap_lookup_reference` | `category: "connectiontypes", query: "CCS"` → `connectiontypeid: 33` |
-| 3 | `openchargemap_find_stations` | coordinates + `connectiontypeid: 33` + `minpowerkw: 50` → ranked nearby DC fast stations |
+| 2 | `openchargemap_lookup_reference` | `category: "connectiontypes", query: "CCS"` → `connectiontypeid: [33, 32]` |
+| 3 | `openchargemap_find_stations` | coordinates + `connectiontypeid: [33, 32]` + `minpowerkw: 50` → ranked nearby DC fast stations |
 | 4 | `openchargemap_get_station_comments` | for the top candidate → confirm recent check-ins don't report a fault |
 
 ### Known station → full detail
@@ -494,7 +489,7 @@ OCM v3 has two endpoints this server uses; reference data is bundled.
 
 **Comments come from the POI, not a comments endpoint.** `idea.md` assumed a `/v3/comments` feed; the live probe returned **404** for `GET /v3/comments`. Comments are only available embedded in the POI via `includecomments=true` (`UserComments[]`). `get_station_comments` is therefore backed by the same `/poi` call with `includecomments=true`, extracting and reshaping `UserComments`. This is the one material deviation from the idea sketch — the tool and its user goal are unchanged; only the backing endpoint differs.
 
-**Empty results are modeled deliberately.** OCM returns HTTP 200 + `[]` for a non-existent `chargepointid` (verified for IDs in the normal range; very large IDs such as 9999999999 fall back to returning random stations — but those are not valid OCM IDs) — `get_station` / `get_station_comments` detect the empty array and throw `not_found` rather than returning a null record. For `find_stations`, zero matches is `no_stations` (NotFound) with a "widen/relax" recovery. For `get_station_comments`, an existing station with no check-ins returns `comments: []` (not an error) — and the description states absence of reports is not evidence the charger works (don't fabricate reliability from missing data).
+**Empty results are modeled deliberately.** OCM returns HTTP 200 + `[]` for a non-existent `chargepointid` (verified for IDs in the normal range; very large IDs such as 9999999999 fall back to returning random stations — but those are not valid OCM IDs) — `get_station` / `get_station_comments` detect the empty array and throw `not_found` rather than returning a null record. For `find_stations`, an exhausted search with zero matches returns success with `stations: []`, `totalCount: 0`, a search echo and widen/relax guidance. A sentinel-confirmed upstream remainder stays explicitly partial. Reference misses return success with `matches: []`, a query echo and spelling/browse guidance. For `get_station_comments`, an existing station with no check-ins returns `comments: []` (not an error) — and the description states absence of reports is not evidence the charger works (don't fabricate reliability from missing data).
 
 **403, not 401, for bad keys — mapped to `auth_failed`/Unauthorized.** The probe showed both missing and invalid keys return HTTP 403. The service maps 403 → an `auth_failed` contract error whose recovery names the env var and the free-signup path, framed as a server-config issue rather than agent input. (A missing key fails fast at startup via `parseEnvConfig`; the runtime 403 path covers a revoked/rotated key.)
 
@@ -516,7 +511,7 @@ OCM v3 has two endpoints this server uses; reference data is bundled.
 - **Coordinate-native — no place-name search.** Place names must be geocoded externally (`openstreetmap_search_places`). The server intentionally does not geocode.
 - **Connection-level power is frequently estimated or absent.** Many `PowerKW` values are OCM estimates ("kW power is an estimate based on the connection type" appears in connection comments) or null. `minpowerkw` filtering is only as good as the underlying data; treat power as approximate.
 - **Reference snapshot vintage.** Bundled reference data is a point-in-time snapshot (`REFERENCE_SNAPSHOT_DATE`). New operators or connector types added to OCM after it won't resolve until the snapshot is refreshed or `OPENCHARGEMAP_REFERENCE_REFRESH` is enabled. Connector types are near-static; the operator list grows slowly. `snapshotDate` reports the vintage of whichever set is actually in memory, paired with `source` (`live` | `bundled`) — `/referencedata` publishes no dataset date, `Last-Modified`, or `ETag`, so a successful refresh is dated by the moment it succeeded, and a failed one keeps the bundle's date rather than drifting forward.
-- **`maxresults` caps the page, not the corpus.** `offset` plus the `nextOffset` each truncated page reports reads the remainder, but paging is bounded: OCM ignores `offset`, `skip`, and `page` (confirmed live — identical records in identical order with and without them) and returns a bare array with no match count in the body or headers. So pagination is necessarily server-side, over an over-fetched candidate page of at most 500 records per search, and `totalCount` on `find_stations` is what that search retrieved: exact only when the page came back short of the candidate cap, otherwise a floor that rises as a deeper window widens the page. The notice states which of the two applies, and names widening filters or shrinking the area only when the page came back full — telling a caller whose page came back short to narrow their search would cost them stations that paging reaches. The candidate page is sized from a 100/250/500 ladder, so a window that outgrows its rung refetches one size up; the deepest usable `offset` is 499, one below the 500 records a single search can reach.
+- **`maxresults` caps the page, not the corpus.** OCM ignores upstream offsets and publishes no match total. Every search requests 501 records: the first 500 form a fixed candidate pool; an additional sentinel only proves an upstream remainder and never enters normalization, local filters or counts. Pages share one ten-minute tenant cache entry independent of offset and page size. `totalCount` stays stable while cached, exact without a sentinel and a floor with one. The deepest usable offset is 499. The fixed pool increases bandwidth for the first small page but avoids overlapping refetches while paging. No byte cap changes the caller’s page size.
 - **Paged results can shift between calls.** A larger `maxresults` returns the same ordered prefix (verified for radius and bounding-box searches alike), which is what lets a wider candidate page stand in for a narrower one. But OCM is edited continuously and results are cached for ten minutes, so a station added or removed between two fetches of the same search can move what a later `offset` lands on. Ordering is stable; membership is not.
 
 ---
@@ -558,9 +553,9 @@ OCM v3 has two endpoints this server uses; reference data is bundled.
 
 ## Attribution
 
-Open Charge Map data is **CC BY 4.0** — attribution is mandatory (no share-alike, no anti-AI/anti-redistribution clause). Placement:
+Open Charge Map combines data from providers with different license terms. Stations expose `dataProviderLicense` and `isOpenDataLicensed` when supplied; missing terms remain unknown. No implicit `opendata` filter removes stations. Placement:
 
-1. **Every tool output** carries an `attribution` string: `"Station data © Open Charge Map contributors, licensed under CC BY 4.0 (openchargemap.org)."`
+1. **Every tool output** carries an `attribution` string: `"Station data © Open Charge Map contributors and the providers named on each station (openchargemap.org). License terms vary by provider."`
 2. **README** carries a visible attribution + license note, like other attribution-required open-data servers (`openstreetmap`, `openfoodfacts`).
 3. **Server `instructions`** (the `createApp` session-level field) may restate the attribution requirement once so clients surface it without reading every tool description.
 
@@ -584,8 +579,9 @@ Open Charge Map data is **CC BY 4.0** — attribution is mandatory (no share-ali
 | 2026-06-13 | UUID input removed from `get_station` and `get_station_comments`; `id` is numeric only | Verified that passing a UUID string as `chargepointid` returns 100 random stations (a default listing), not the matching station. No UUID-to-numeric lookup param exists. All tools accept numeric OCM IDs only; the UUID field is exposed in output for reference but cannot be used as lookup input. |
 | 2026-06-13 | Coordinate-native; geocoding via `openstreetmap_search_places`, not rebuilt | OCM is coordinate-only. The companion `openstreetmap` server already provides geocoding; documenting the two-step keeps the boundary honest and the surface small. |
 | 2026-06-13 | `lookup_reference` resolves via strict token match over the full bounded set + curated connector aliases; no fuzzy fallback in v1 | The bounded-set name→opaque-ID pattern (MCP-side list filtering). Strict normalized token match is the ~90% case; aliases (`J1772`, `CCS`, `Supercharger`/`NACS`, `Type 2`) cover the connectors agents actually name. On empty match, recovery says "browse the category" rather than guessing — lets the model self-correct. |
+| 2026-10-25 | Descriptions give CCS as both IDs (`[32, 33]`), never 33 alone; alias ranking unchanged | Open Charge Map tags North American CCS as Type 1 (32) and European CCS as Type 2 (33). The earlier `"CCS" → 33` example led US callers to a filter that matches nothing (Portland, 15 km: 33 → 0 stations, 32 → 65). The lookup already returned both IDs, so the fix is the guidance: pass every returned ID as an array. A region-aware ranking was rejected because the lookup has no coordinates, and guessing a region would hide the other variant. |
 | 2026-06-13 | No DataCanvas, no write tools, one resource (`openchargemap://station/{id}`) | Discovery/record surface, not analytical rows (shape-not-size). Writes need moderation, defer. The single resource is the detail tool's convenience twin; no reference resource (it's a resolve surface, not a stable-by-URI record). |
-| 2026-06-13 | CC BY 4.0 attribution in every tool output + README + server `instructions` | Mandatory license term. Same class as other attribution-required open-data sources (`openstreetmap`, `openfoodfacts`); credit "Open Charge Map" + contributors, no anti-AI clause to work around. |
+| 2026-10-25 | Provider-specific licensing in station records, contributor and provider attribution on every output | OCM combines differently licensed sources. Preserve each provider's license text and explicit open-data flag rather than implying one license covers every station; no default filter silently removes stations. |
 | 2026-06-13 | Display identity = hyphenated machine name `openchargemap-mcp-server` everywhere | Fleet rule — `createApp` `title`, manifest `display_name`, docs headers all use the machine name; Title Case is a known agent failure mode. `description` derives from package.json (not duplicated into the identity block). |
 
 ---

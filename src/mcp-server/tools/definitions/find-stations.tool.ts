@@ -13,18 +13,20 @@ import {
   MAX_SEARCH_WINDOW,
 } from '@/services/openchargemap/openchargemap-service.js';
 import type { SearchPoiParams } from '@/services/openchargemap/types.js';
+import { getReferenceDataService } from '@/services/reference-data/reference-data-service.js';
+import { applyPageLimit, pageLimitSchema } from './_page-limit.js';
 import { renderStationBlock, StationSchema } from './_station-schema.js';
 
 /**
- * Connector/operator/usage/level/status filter: a single positive int ID or an array (OR-matched).
+ * Connector/operator/usage/level/status filter: an integer ID or an array (OR-matched), with the category's minimum.
  * The array must be non-empty — an empty one carries no filter and would widen the search instead
  * of narrowing it, so omitting the field is the only way to express "no filter".
  */
-const idFilter = (max: number) =>
+const idFilter = (max: number, min = 1) =>
   z.union([
-    z.number().int().positive().describe('A single reference ID.'),
+    z.number().int().min(min).describe('A single reference ID.'),
     z
-      .array(z.number().int().positive().describe('A reference ID.'))
+      .array(z.number().int().min(min).describe('A reference ID.'))
       .min(1)
       .max(max)
       .describe('Several reference IDs, OR-matched. At least one.'),
@@ -78,12 +80,12 @@ const FindStationsInput = z.object({
     .regex(/^[A-Za-z]{2}$/)
     .optional()
     .describe(
-      'Restrict to one country by ISO 3166-1 alpha-2 code (e.g. "US", "FR", "GB"). Omit for a global search. The server is global by default — there is no implicit country.',
+      'Restrict to one country by ISO 3166-1 alpha-2 code (e.g. "US", "FR", "GB"). Omit for a global search. An unrecognized code is not applied; the summary and notice disclose the unrestricted search. Resolve valid codes with openchargemap_lookup_reference (countries).',
     ),
-  connectiontypeid: idFilter(10)
+  connectiontypeid: idFilter(10, 0)
     .optional()
     .describe(
-      'Connector type ID, or an array of IDs (OR-matched). Resolve names with openchargemap_lookup_reference — e.g. CCS (Type 2)=33, CHAdeMO=2, NACS/Tesla Supercharger=27, Type 2 socket=25, Type 1/J1772=1.',
+      'Connector type ID, or an array of IDs (OR-matched). Resolve names with openchargemap_lookup_reference — e.g. CCS is two IDs, 32 (Type 1, North America) and 33 (Type 2, Europe and most other regions), so pass [32, 33] when the region is unknown; CHAdeMO=2, NACS/Tesla Supercharger=27, Type 2 socket=25, Type 1/J1772=1.',
     ),
   minpowerkw: z
     .number()
@@ -98,7 +100,7 @@ const FindStationsInput = z.object({
     .describe(
       'Operator/network ID, or array of IDs (OR-matched). Resolve a network name with openchargemap_lookup_reference (category "operators") — e.g. "Tesla", "ChargePoint".',
     ),
-  usagetypeid: idFilter(10)
+  usagetypeid: idFilter(10, 0)
     .optional()
     .describe(
       'Usage/access type ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category "usagetypes") — e.g. Public=1, Public-Pay At Location=5, Public-Membership Required=4.',
@@ -108,7 +110,7 @@ const FindStationsInput = z.object({
     .describe(
       'Charge level ID (1=Low <2kW, 2=Medium >2kW, 3=High >40kW/fast). Array OR-matched. Use 3 as a coarse "fast charging only" filter when a specific connector is not required.',
     ),
-  statustypeid: idFilter(10)
+  statustypeid: idFilter(10, 0)
     .optional()
     .describe(
       'Registry operational-status ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category "statustypes"). NOTE: registry status is operator-reported and can be stale — combine with dateLastVerified and openchargemap_get_station_comments to judge real-world reliability, do not treat it as ground truth.',
@@ -122,13 +124,11 @@ const FindStationsInput = z.object({
       'Minimum number of charge points (stalls) at the station. Filters out single-point locations when you need a station likely to have an open stall.',
     ),
 
-  maxresults: z
-    .number()
-    .int()
-    .min(1)
-    .max(200)
+  maxresults: pageLimitSchema(200)
     .default(25)
-    .describe('Maximum stations to return, ordered by distance from the search point. Max 200.'),
+    .describe(
+      'Maximum stations to return, ordered by distance from the search point. Max 200; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.',
+    ),
   offset: z
     .number()
     .int()
@@ -143,7 +143,7 @@ const FindStationsInput = z.object({
 export const findStations = tool('openchargemap_find_stations', {
   title: 'openchargemap-mcp-server: find stations',
   description:
-    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_search_places first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. "CCS" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
+    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_search_places first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its IDs with openchargemap_lookup_reference and pass every returned ID (e.g. "CCS" -> [32, 33]; Open Charge Map distinguishes CCS Type 1 (32, common in North America) and Type 2 (33, common in Europe); 33 alone can miss Type 1 stations). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: FindStationsInput,
@@ -159,14 +159,16 @@ export const findStations = tool('openchargemap_find_stations', {
       ),
     attribution: z
       .string()
-      .describe('Required attribution to Open Charge Map contributors under CC BY 4.0.'),
+      .describe(
+        'Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.',
+      ),
   }),
 
   enrichment: {
     totalCount: z
       .number()
       .describe(
-        'Matching stations this search retrieved, before the offset/maxresults page was taken. Open Charge Map publishes no match total and one search can only retrieve so deep, so this is exact only when the search reached the end of what Open Charge Map holds for the area — otherwise it is a floor that rises as deeper pages are read. The notice says which of the two applies.',
+        'Matching stations in the retrieved pool of up to 500 candidates, before offset/maxresults selects the page. Exact when no additional upstream stations remain; otherwise a floor. Stable across pages while the pool remains cached. The notice states whether additional upstream stations exist.',
       ),
     truncated: z
       .boolean()
@@ -207,13 +209,6 @@ export const findStations = tool('openchargemap_find_stations', {
         'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_search_places to obtain coordinates.',
     },
     {
-      reason: 'no_stations',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'Open Charge Map holds no station for the search area and filters — either it returned nothing at all, or every station it returned was ruled out and there were no further candidates.',
-      recovery:
-        'Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.',
-    },
-    {
       reason: 'upstream_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       retryable: true,
@@ -233,6 +228,16 @@ export const findStations = tool('openchargemap_find_stations', {
   ],
 
   async handler(input, ctx) {
+    const limit = applyPageLimit(input.maxresults, 200, 'find_stations', 'maxresults', ctx);
+    input = { ...input, maxresults: limit.value };
+    const notices: string[] = limit.notice ? [limit.notice] : [];
+    const unknownCountry =
+      input.countrycode !== undefined &&
+      !getReferenceDataService().hasCountryCode(input.countrycode);
+    if (unknownCountry)
+      notices.push(
+        `Country code ${input.countrycode?.toUpperCase()} is not an Open Charge Map country code; the search ran without a country restriction. Resolve valid codes with openchargemap_lookup_reference (category countries).`,
+      );
     const hasLatitude = input.latitude !== undefined;
     const hasLongitude = input.longitude !== undefined;
     const hasRadius = hasLatitude && hasLongitude;
@@ -254,7 +259,7 @@ export const findStations = tool('openchargemap_find_stations', {
             distance: input.distance,
             distanceUnit: input.distanceUnit,
           }),
-      ...(input.countrycode ? { countrycode: input.countrycode } : {}),
+      ...(input.countrycode && !unknownCountry ? { countrycode: input.countrycode } : {}),
       ...(input.connectiontypeid !== undefined ? { connectiontypeid: input.connectiontypeid } : {}),
       ...(input.minpowerkw !== undefined ? { minpowerkw: input.minpowerkw } : {}),
       ...(input.operatorid !== undefined ? { operatorid: input.operatorid } : {}),
@@ -264,23 +269,17 @@ export const findStations = tool('openchargemap_find_stations', {
       ...(input.minchargepoints !== undefined ? { minchargepoints: input.minchargepoints } : {}),
     };
 
-    const { candidateCap, fetched, matches } = await getOpenChargeMapService().searchPois(
+    const { fetched, matches, moreUpstream } = await getOpenChargeMapService().searchPois(
       params,
       ctx,
     );
-    // A full candidate page means the registry holds more than was retrieved, so an empty page is
-    // a limit of this search rather than a fact about the area. Only a page that came back short
-    // settles the question — and only then can zero matches honestly be reported as none existing.
-    const moreUpstream = fetched >= candidateCap;
+    // Only an additional raw sentinel proves an upstream remainder. An exactly full pool without
+    // one is exhausted, including when local coordinate or charge-point filters remove every row.
     ctx.log.info('OCM search complete', {
       fetched,
       matches: matches.length,
       mode: hasBbox ? 'bbox' : 'radius',
     });
-
-    if (matches.length === 0 && !moreUpstream) {
-      throw ctx.fail('no_stations', 'No charging stations matched the search and filters.');
-    }
 
     const stations = matches.slice(input.offset, input.offset + input.maxresults);
     /** One past the last station on this page — both the next offset and the more-left test. */
@@ -292,25 +291,34 @@ export const findStations = tool('openchargemap_find_stations', {
       ctx.enrich.truncated({
         shown: stations.length,
         cap: input.maxresults,
-        guidance: truncationGuidance({
-          matched: matches.length,
-          moreRetrieved,
-          moreUpstream,
-          offset: input.offset,
-          pageSize: stations.length,
-          maxresults: input.maxresults,
-        }),
+        guidance: [
+          ...notices,
+          truncationGuidance({
+            matched: matches.length,
+            moreRetrieved,
+            moreUpstream,
+            offset: input.offset,
+            pageSize: stations.length,
+            maxresults: input.maxresults,
+          }),
+        ].join(' '),
       });
       if (moreRetrieved) ctx.enrich({ nextOffset: pageEnd });
-    } else if (stations.length === 0) {
-      ctx.enrich.notice(
-        `This search matched ${matches.length} station(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
-      );
+    } else {
+      if (matches.length === 0)
+        notices.push(
+          `No charging stations matched ${buildSearchSummary(input, hasBbox, unknownCountry)} Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.`,
+        );
+      else if (stations.length === 0)
+        notices.push(
+          `This search matched ${matches.length} station(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
+        );
+      if (notices.length) ctx.enrich.notice(notices.join(' '));
     }
 
     return {
       stations,
-      searchSummary: buildSearchSummary(input, hasBbox),
+      searchSummary: buildSearchSummary(input, hasBbox, unknownCountry),
       attribution: ATTRIBUTION,
     };
   },
@@ -363,7 +371,7 @@ function locationFailure(supplied: {
  * two flags rather than one. A candidate page that came back short retrieved everything Open Charge
  * Map holds for the area, so `matched` IS the match count and there is nothing deeper to widen
  * toward — telling that caller to narrow the area would be both false and the opposite of what
- * recovers their data (paging does). A full page leaves `matched` a floor, so no sentence may state
+ * recovers their data (paging does). A confirmed upstream remainder leaves `matched` a floor, so no sentence may state
  * it as the number of matching stations.
  */
 function truncationGuidance(page: {
@@ -395,7 +403,11 @@ function truncationGuidance(page: {
 }
 
 /** Compose a human-readable echo of the resolved search and active filters. */
-function buildSearchSummary(input: z.infer<typeof FindStationsInput>, hasBbox: boolean): string {
+function buildSearchSummary(
+  input: z.infer<typeof FindStationsInput>,
+  hasBbox: boolean,
+  unknownCountry = false,
+): string {
   const bits: string[] = [];
   if (hasBbox && input.boundingbox) {
     const b = input.boundingbox;
@@ -405,7 +417,12 @@ function buildSearchSummary(input: z.infer<typeof FindStationsInput>, hasBbox: b
       `Within ${input.distance} ${input.distanceUnit} of ${input.latitude},${input.longitude}`,
     );
   }
-  if (input.countrycode) bits.push(`country=${input.countrycode.toUpperCase()}`);
+  if (input.countrycode)
+    bits.push(
+      unknownCountry
+        ? `countrycode=${input.countrycode.toUpperCase()} (unrecognized, not applied)`
+        : `country=${input.countrycode.toUpperCase()}`,
+    );
   if (input.connectiontypeid !== undefined)
     bits.push(`connectiontypeid=${[input.connectiontypeid].flat().join(',')}`);
   if (input.minpowerkw !== undefined) bits.push(`minpowerkw=${input.minpowerkw}`);

@@ -8,14 +8,11 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
-import {
-  CommentSchema,
-  renderComment,
-  renderOperationalText,
-  visibleComments,
-} from './_station-schema.js';
+import { applyPageLimit, pageLimitSchema } from './_page-limit.js';
+import { CommentSchema, renderComment, renderOperationalText } from './_station-schema.js';
 
 export const getStationComments = tool('openchargemap_get_station_comments', {
   title: 'openchargemap-mcp-server: get station comments',
@@ -25,13 +22,11 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
 
   input: z.object({
     id: z.number().int().positive().describe('Numeric OCM station ID.'),
-    maxresults: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
+    maxresults: pageLimitSchema(100)
       .default(25)
-      .describe('Maximum comments to return, newest first. Max 100.'),
+      .describe(
+        'Maximum comments to return, newest first. Max 100; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.',
+      ),
     offset: z
       .number()
       .int()
@@ -84,7 +79,9 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       ),
     attribution: z
       .string()
-      .describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+      .describe(
+        'Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.',
+      ),
   }),
 
   enrichment: {
@@ -140,6 +137,9 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
   ],
 
   async handler(input, ctx) {
+    const limit = applyPageLimit(input.maxresults, 100, 'get_station_comments', 'maxresults', ctx);
+    input = { ...input, maxresults: limit.value };
+    const notices: string[] = limit.notice ? [limit.notice] : [];
     const station = await getOpenChargeMapService().getPoi(
       input.id,
       { includeComments: true },
@@ -163,17 +163,22 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       ctx.enrich.truncated({
         shown: comments.length,
         cap: input.maxresults,
-        guidance: `Showing ${comments.length} of ${allComments.length} comments (newest first) from offset ${input.offset}. Pass offset ${input.offset + comments.length} on the same call for the next ${input.maxresults}.`,
+        guidance: [
+          ...notices,
+          `Showing ${comments.length} of ${allComments.length} comments (newest first) from offset ${input.offset}. Pass offset ${input.offset + comments.length} on the same call for the next ${input.maxresults}.`,
+        ].join(' '),
       });
       ctx.enrich({ nextOffset: input.offset + comments.length });
-    } else if (allComments.length === 0) {
-      ctx.enrich.notice(
-        'No community check-ins on record for this station. Absence of reports is not evidence the charger works.',
-      );
-    } else if (comments.length === 0) {
-      ctx.enrich.notice(
-        `This station has ${allComments.length} comment(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
-      );
+    } else {
+      if (allComments.length === 0)
+        notices.push(
+          'No community check-ins on record for this station. Absence of reports is not evidence the charger works.',
+        );
+      else if (comments.length === 0)
+        notices.push(
+          `This station has ${allComments.length} comment(s), so offset ${input.offset} is past the end. Lower offset to read them.`,
+        );
+      if (notices.length) ctx.enrich.notice(notices.join(' '));
     }
 
     const reliabilityNote = buildReliabilityNote({
@@ -206,11 +211,11 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       result.registryStatusId != null ? ` (status id ${result.registryStatusId})` : '';
     const opText = renderOperationalText(result.registryStatusId, result.isOperational);
     const verified = result.dateLastVerified
-      ? `last verified ${result.dateLastVerified}`
+      ? `last verified ${escapeMarkdownInline(result.dateLastVerified)}`
       : 'never verified';
     const lines = [
-      `**${result.stationTitle}** (id ${result.stationId})`,
-      `Registry status: ${result.registryStatus ?? 'Unknown'}${statusId} — ${opText} · ${verified}`,
+      `**${escapeMarkdownInline(result.stationTitle)}** (id ${result.stationId})`,
+      `Registry status: ${escapeMarkdownInline(result.registryStatus ?? 'Unknown')}${statusId} — ${opText} · ${verified}`,
       '',
     ];
 
@@ -232,20 +237,12 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
       // station whose every comment fits one page there is nothing to disambiguate.
       const wholeSet = paged === onRecord;
       const header = wholeSet ? `${paged} comment(s)` : `${paged} of ${onRecord} comment(s)`;
-      const { shown, omitted } = visibleComments(result.comments);
-      if (shown.length === 0) {
-        lines.push(`${header}, none carrying text, a rating, or a check-in outcome.`);
-      } else {
-        lines.push(`${header}, newest first:`);
-        for (const c of shown) lines.push(`- ${renderComment(c)}`);
-        if (omitted > 0) {
-          const scope = wholeSet ? '' : ` of these ${paged}`;
-          lines.push(`(${omitted}${scope} not listed — no text, rating, or check-in outcome)`);
-        }
-      }
+      lines.push(`${header}, newest first:`);
+      for (const c of result.comments) lines.push(`- ${renderComment(c)}`);
     }
 
-    if (result.reliabilityNote) lines.push('', `⚠️ Reliability: ${result.reliabilityNote}`);
+    if (result.reliabilityNote)
+      lines.push('', `⚠️ Reliability: ${escapeMarkdownInline(result.reliabilityNote)}`);
     lines.push('', result.attribution);
     return [{ type: 'text', text: lines.join('\n') }];
   },

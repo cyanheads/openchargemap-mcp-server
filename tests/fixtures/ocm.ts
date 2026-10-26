@@ -1,7 +1,7 @@
 /**
  * @fileoverview Shared OCM POI fixtures for tool tests — a full station, a sparse station (omitted
  * upstream fields, absent StatusType key), a station with comments, a partly-operational station,
- * and a station whose entire comment list is information-free.
+ * and a station whose entire comment list carries only metadata.
  * @module tests/fixtures/ocm
  */
 
@@ -96,7 +96,7 @@ export const FULL_POI_DETAIL = {
 } satisfies RawPoi;
 
 /**
- * A station whose whole comment list carries no information — OCM stores runs of check-ins with a
+ * A station whose whole comment list carries only metadata — OCM stores runs of check-ins with a
  * null Comment, null Rating, and no CheckinStatusType (verified on real records).
  */
 export const BLANK_COMMENTS_POI = {

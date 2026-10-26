@@ -6,14 +6,10 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { ATTRIBUTION, buildReliabilityNote } from '@/services/openchargemap/attribution.js';
 import { getOpenChargeMapService } from '@/services/openchargemap/openchargemap-service.js';
-import {
-  DetailStationSchema,
-  renderComment,
-  renderStationBlock,
-  visibleComments,
-} from './_station-schema.js';
+import { DetailStationSchema, renderComment, renderStationBlock } from './_station-schema.js';
 
 export const getStation = tool('openchargemap_get_station', {
   title: 'openchargemap-mcp-server: get station',
@@ -41,7 +37,9 @@ export const getStation = tool('openchargemap_get_station', {
       ),
     attribution: z
       .string()
-      .describe('Required CC BY 4.0 attribution to Open Charge Map contributors.'),
+      .describe(
+        'Attribution to Open Charge Map contributors and station data providers; license terms vary by provider.',
+      ),
   }),
 
   errors: [
@@ -101,37 +99,32 @@ export const getStation = tool('openchargemap_get_station', {
     const s = result.station;
     const lines = [renderStationBlock(s)];
 
-    if (s.generalComments) lines.push(`General comments: ${s.generalComments}`);
-    if (s.usageCost) lines.push(`Usage cost: ${s.usageCost}`);
-    if (s.dataProviderUrl) lines.push(`Data provider URL: ${s.dataProviderUrl}`);
-    if (s.dateLastStatusUpdate) lines.push(`Last status update: ${s.dateLastStatusUpdate}`);
-    if (s.submissionStatus) lines.push(`Submission status: ${s.submissionStatus}`);
+    if (s.generalComments)
+      lines.push(`General comments: ${escapeMarkdownInline(s.generalComments)}`);
+    if (s.usageCost) lines.push(`Usage cost: ${escapeMarkdownInline(s.usageCost)}`);
+    if (s.dataProviderUrl)
+      lines.push(`Data provider URL: ${markdownLink(s.dataProviderUrl, s.dataProviderUrl)}`);
+    if (s.dateLastStatusUpdate)
+      lines.push(`Last status update: ${escapeMarkdownInline(s.dateLastStatusUpdate)}`);
+    if (s.submissionStatus)
+      lines.push(`Submission status: ${escapeMarkdownInline(s.submissionStatus)}`);
 
     if (s.media && s.media.length > 0) {
       lines.push('Media:');
-      for (const m of s.media) lines.push(`  - ${m.url}${m.comment ? ` (${m.comment})` : ''}`);
+      for (const m of s.media) lines.push(`  - ${markdownImage(m.comment ?? m.url, m.url)}`);
     }
 
     if (s.comments) {
       if (s.comments.length === 0) {
         lines.push('Comments: none on record');
       } else {
-        const { shown, omitted } = visibleComments(s.comments);
-        if (shown.length === 0) {
-          lines.push(
-            `Comments: ${s.comments.length} on record, none carrying text, a rating, or a check-in outcome`,
-          );
-        } else {
-          lines.push('Comments:');
-          for (const c of shown) lines.push(`  - ${renderComment(c)}`);
-          if (omitted > 0) {
-            lines.push(`  (${omitted} not listed — no text, rating, or check-in outcome)`);
-          }
-        }
+        lines.push('Comments:');
+        for (const c of s.comments) lines.push(`  - ${renderComment(c)}`);
       }
     }
 
-    if (result.reliabilityNote) lines.push('', `⚠️ Reliability: ${result.reliabilityNote}`);
+    if (result.reliabilityNote)
+      lines.push('', `⚠️ Reliability: ${escapeMarkdownInline(result.reliabilityNote)}`);
     lines.push('', result.attribution);
     return [{ type: 'text', text: lines.join('\n') }];
   },

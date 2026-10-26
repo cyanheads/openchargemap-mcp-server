@@ -250,13 +250,17 @@ toolContractSuite(lookupReference, {
         });
       },
     },
-  ],
-  errors: [
     {
-      name: 'reports an unmatched query as no_match',
+      name: 'returns an unmatched query as empty success with recovery',
       input: { category: 'connectiontypes', query: 'zzzz-no-such-connector' },
-      code: JsonRpcErrorCode.NotFound,
-      reason: 'no_match',
+      assert: (result) => {
+        expect(result.structuredContent).toMatchObject({
+          matches: [],
+          totalCount: 0,
+          notice: expect.stringContaining('browse'),
+        });
+        expect(JSON.stringify(result.content)).toContain('zzzz-no-such-connector');
+      },
     },
   ],
 });

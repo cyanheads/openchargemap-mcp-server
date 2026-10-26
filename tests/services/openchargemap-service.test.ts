@@ -113,6 +113,40 @@ describe('OpenChargeMapService cache keys are storage-safe', () => {
 });
 
 describe('OpenChargeMapService boundary behavior', () => {
+  it('keeps one fixed pool across deep windows and excludes the sentinel from normalization', async () => {
+    const pool = Array.from({ length: 500 }, (_, i) => ({ ...FULL_POI, ID: i + 1 }));
+    fetchWithTimeout.mockResolvedValue(jsonResponse([...pool, { ...FULL_POI, ID: 999 }]));
+    const svc = new OpenChargeMapService(serverConfig);
+    const { ctx, setSpy } = spiedCtx();
+    for (const window of [1, 26, 101, 500]) {
+      const result = await svc.searchPois({ window, latitude: 47.6, longitude: -122.3 }, ctx);
+      expect(result).toMatchObject({ candidateCap: 500, fetched: 500, moreUpstream: true });
+      expect(result.matches.map((station) => station.id)).toEqual(
+        pool.map((station) => station.ID),
+      );
+    }
+    expect(fetchWithTimeout).toHaveBeenCalledOnce();
+    expect(new URL(String(fetchWithTimeout.mock.calls[0]![0])).searchParams.get('maxresults')).toBe(
+      '501',
+    );
+    expect(setSpy).toHaveBeenCalledOnce();
+    expect(setSpy.mock.calls[0]![2]).toEqual({ ttl: 600 });
+  });
+
+  it('distinguishes exactly exhausted pools from a sentinel even when local filters empty them', async () => {
+    const svc = new OpenChargeMapService(serverConfig);
+    for (const size of [500, 501]) {
+      fetchWithTimeout.mockResolvedValue(
+        jsonResponse(Array.from({ length: size }, () => ZERO_COORD_POI)),
+      );
+      const result = await svc.searchPois(
+        { window: 500, latitude: 47.6, longitude: -122.3 },
+        spiedCtx().ctx,
+      );
+      expect(result).toMatchObject({ fetched: 500, moreUpstream: size === 501, matches: [] });
+    }
+  });
+
   it('serializes every supported search filter at the OCM boundary', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
     const svc = new OpenChargeMapService(serverConfig);
@@ -155,7 +189,7 @@ describe('OpenChargeMapService boundary behavior', () => {
     // minnumberofpoints is inert upstream; meetsMinChargePoints carries the contract instead.
     expect(url.searchParams.has('minnumberofpoints')).toBe(false);
     // maxresults is the service's own candidate page, never the caller's window.
-    expect(url.searchParams.get('maxresults')).toBe('100');
+    expect(url.searchParams.get('maxresults')).toBe('501');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
@@ -165,11 +199,11 @@ describe('OpenChargeMapService boundary behavior', () => {
     const svc = new OpenChargeMapService(serverConfig);
 
     for (const [window, expectedCap] of [
-      [1, '100'],
-      [25, '100'],
-      [50, '250'],
-      [200, '500'],
-      [500, '500'],
+      [1, '501'],
+      [25, '501'],
+      [50, '501'],
+      [200, '501'],
+      [500, '501'],
     ] as const) {
       fetchWithTimeout.mockClear();
       await svc.searchPois({ window, latitude: 47.6, longitude: -122.3 }, spiedCtx().ctx);
@@ -204,7 +238,7 @@ describe('OpenChargeMapService boundary behavior', () => {
       spiedCtx().ctx,
     );
 
-    expect(result).toMatchObject({ candidateCap: 100, fetched: 2 });
+    expect(result).toMatchObject({ candidateCap: 500, fetched: 2 });
     expect(result.matches).toEqual([]);
   });
 

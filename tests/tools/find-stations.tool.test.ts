@@ -99,7 +99,7 @@ describe('openchargemap_find_stations', () => {
       powerKW: 3.7,
       quantity: 2,
     });
-    expect(result.attribution).toContain('CC BY 4.0');
+    expect(result.attribution).toContain('License terms vary by provider');
     expect(result.searchSummary).toContain('Within 15 KM');
   });
 
@@ -173,7 +173,7 @@ describe('openchargemap_find_stations', () => {
   });
 
   it.each([
-    ['connectiontypeid', 0],
+    ['connectiontypeid', -1],
     ['operatorid', -1],
     ['usagetypeid', 1.5],
     ['statustypeid', Array.from({ length: 11 }, (_, index) => index + 1)],
@@ -315,20 +315,20 @@ describe('openchargemap_find_stations', () => {
     expect(fetchWithTimeout).toHaveBeenCalledOnce();
   });
 
-  it('throws no_stations on an empty result set', async () => {
+  it('returns empty success with recovery on both surfaces', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([]));
     const result = await runToolContract(
       findStations,
       { latitude: 47, longitude: -122, connectiontypeid: 33 },
       { context: { tenantId: 'test' } },
     );
-    expect(result.isError).toBe(true);
+    expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({
-      error: {
-        code: JsonRpcErrorCode.NotFound,
-        data: { reason: 'no_stations', recovery: { hint: declaredRecovery('no_stations') } },
-      },
+      stations: [],
+      totalCount: 0,
+      notice: expect.stringContaining('Widen'),
     });
+    expect(JSON.stringify(result.content)).toContain('connectiontypeid=33');
   });
 
   it('tolerates a sparse payload (absent StatusType, null power, no operator)', async () => {
@@ -362,10 +362,7 @@ describe('openchargemap_find_stations', () => {
     // FULL_POI: no NumberOfPoints, one connection Quantity 2 → count resolves to 2.
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
     const input = findStations.input.parse({ latitude: 47, longitude: -122, minchargepoints: 3 });
-    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_stations' },
-    });
+    await expect(findStations.handler(input, ctx())).resolves.toMatchObject({ stations: [] });
   });
 
   it('minchargepoints keeps a station whose summed connection quantity meets the threshold', async () => {
@@ -398,7 +395,7 @@ describe('openchargemap_find_stations', () => {
     expect(ids).not.toContain(494804); // 0,0 sentinel dropped
   });
 
-  it('throws no_stations when every result is a 0,0 sentinel', async () => {
+  it('returns empty success when every result is a 0,0 coordinate placeholder', async () => {
     fetchWithTimeout.mockResolvedValue(
       jsonResponse([ZERO_COORD_POI, { ...ZERO_COORD_POI, ID: 304716 }]),
     );
@@ -408,10 +405,7 @@ describe('openchargemap_find_stations', () => {
       distance: 1,
       countrycode: 'US',
     });
-    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_stations' },
-    });
+    await expect(findStations.handler(input, ctx())).resolves.toMatchObject({ stations: [] });
   });
 
   it('drops records with missing coordinates (absent lat/lng) from search results', async () => {
@@ -423,9 +417,7 @@ describe('openchargemap_find_stations', () => {
     };
     fetchWithTimeout.mockResolvedValue(jsonResponse([noCoords]));
     const input = findStations.input.parse({ latitude: 47, longitude: -122 });
-    await expect(findStations.handler(input, ctx())).rejects.toMatchObject({
-      data: { reason: 'no_stations' },
-    });
+    await expect(findStations.handler(input, ctx())).resolves.toMatchObject({ stations: [] });
   });
 
   it('keeps a station on the equator (single-axis zero is a real location)', async () => {
@@ -499,7 +491,7 @@ describe('openchargemap_find_stations', () => {
     const text = (findStations.format!(result)[0] as { text: string }).text;
     expect(text).toContain('AMLI Mark24');
     expect(text).toContain('Temporarily Unavailable');
-    expect(text).toContain('CC BY 4.0');
+    expect(text).toContain('License terms vary by provider');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/4
@@ -750,7 +742,7 @@ describe('openchargemap_find_stations', () => {
   it('still keeps a no-count-signal station when minchargepoints filters a full candidate page', async () => {
     fetchWithTimeout.mockImplementation((url: string) => {
       const cap = Number(new URL(String(url)).searchParams.get('maxresults'));
-      const page: RawPoi[] = Array.from({ length: cap - 1 }, (_, index) => ({
+      const page: RawPoi[] = Array.from({ length: cap - 2 }, (_, index) => ({
         ...FULL_POI,
         ID: 2000 + index,
       }));
@@ -871,7 +863,7 @@ describe('openchargemap_find_stations', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
-  it('shares one upstream fetch across windows on the same candidate page, and refetches past it', async () => {
+  it('shares one upstream fetch across every window of the fixed candidate pool', async () => {
     fetchWithTimeout.mockImplementation((url: string) => {
       const cap = Number(new URL(String(url)).searchParams.get('maxresults'));
       return Promise.resolve(
@@ -887,16 +879,13 @@ describe('openchargemap_find_stations', () => {
 
     await page(0);
     await page(10);
-    // Both windows quantize to the same candidate page, so the second is served from cache.
+    // Both windows use the same fixed candidate pool.
     expect(fetchWithTimeout).toHaveBeenCalledOnce();
 
-    // A window that outgrows that page fetches the next size up — paging is NOT one fetch per
-    // search, and the rungs are close enough that a default-sized page crosses one every time.
-    // `totalCount` climbs with the wider page, which is why no notice may state it as the number
-    // of matching stations.
     await page(20);
-    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
-    expect(getEnrichment(c).totalCount).toBeGreaterThan(100);
+    await page(490);
+    expect(fetchWithTimeout).toHaveBeenCalledOnce();
+    expect(getEnrichment(c).totalCount).toBe(500);
   });
 
   // --- honesty of the truncation notice: what it may claim depends on the candidate page ---
@@ -931,8 +920,8 @@ describe('openchargemap_find_stations', () => {
     );
 
     const notice = String(getEnrichment(c).notice);
-    expect(notice).toContain('100 stations retrieved');
-    expect(notice).not.toContain('100 matching stations');
+    expect(notice).toContain('500 stations retrieved');
+    expect(notice).not.toContain('500 matching stations');
     expect(notice).toMatch(/floor/i);
   });
 });

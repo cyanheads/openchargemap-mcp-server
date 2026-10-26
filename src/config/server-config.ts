@@ -12,6 +12,19 @@ import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 /** Default Open Charge Map API base URL. */
 export const DEFAULT_OCM_BASE_URL = 'https://api.openchargemap.io/v3';
 
+/** Read the pagination compatibility switch independently of API credentials. */
+export function clampLimitsEnabled(): boolean {
+  return parseEnvConfig(
+    z.object({
+      clampLimits: z
+        .stringbool()
+        .default(true)
+        .describe('Clamp oversized positive integer page sizes to the tool maximum.'),
+    }),
+    { clampLimits: 'OPENCHARGEMAP_CLAMP_LIMITS' },
+  ).clampLimits;
+}
+
 const ServerConfigSchema = z.object({
   /** OCM API key, sent as the `X-API-Key` header on every request. Required. */
   apiKey: z
@@ -41,6 +54,7 @@ let _config: ServerConfig | undefined;
  * Throws `ConfigurationError` (rendered as a clean startup banner) when required vars are missing.
  */
 export function getServerConfig(): ServerConfig {
+  clampLimitsEnabled();
   _config ??= parseEnvConfig(ServerConfigSchema, {
     apiKey: 'OPENCHARGEMAP_API_KEY',
     baseUrl: 'OPENCHARGEMAP_BASE_URL',

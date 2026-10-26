@@ -29,6 +29,8 @@ export interface RawConnection {
   LevelID?: number | null;
   PowerKW?: number | null;
   Quantity?: number | null;
+  StatusType?: RawStatusType | null;
+  StatusTypeID?: number | null;
   Voltage?: number | null;
 }
 
@@ -82,13 +84,14 @@ export interface RawUsageType {
  */
 export interface RawStatusType {
   ID?: number;
-  IsOperational?: boolean;
+  IsOperational?: boolean | null;
   Title?: string | null;
 }
 
 /** Raw OCM data-provider object. */
 export interface RawDataProvider {
   ID?: number;
+  IsOpenDataLicensed?: boolean | null;
   License?: string | null;
   Title?: string | null;
   WebsiteURL?: string | null;
@@ -177,10 +180,14 @@ export interface NormalizedConnection {
   connectionType?: string;
   connectionTypeId?: number;
   currentType?: string;
+  isOperational?: boolean;
   level?: string;
   levelId?: number;
+  notes?: string;
   powerKW?: number | null;
   quantity?: number | null;
+  status?: string;
+  statusTypeId?: number;
   voltage?: number | null;
 }
 
@@ -208,12 +215,14 @@ export interface NormalizedStation {
   address: NormalizedAddress;
   connections: NormalizedConnection[];
   dataProvider?: string;
+  dataProviderLicense?: string;
   dateLastVerified?: string | null;
   distance?: number;
   distanceUnit?: 'KM' | 'Miles';
   id: number;
   isAccessKeyRequired?: boolean;
   isMembershipRequired?: boolean;
+  isOpenDataLicensed?: boolean;
   isOperational?: boolean;
   isPayAtLocation?: boolean;
   isRecentlyVerified?: boolean;
@@ -258,10 +267,8 @@ export interface SearchPoiParams {
   statustypeid?: number | number[];
   usagetypeid?: number | number[];
   /**
-   * How many post-filter matches the caller needs in hand — the end of its result window
-   * (`offset + page size`), NOT the `maxresults` sent upstream. The service sizes its own upstream
-   * page from this, deliberately larger, so the local filters select from a wider pool than the
-   * caller asked for and successive windows are served from one fetch.
+   * End of the caller's result window (`offset + page size`), excluded from the cache key.
+   * Every window reads the same fixed candidate pool; this never sizes the upstream fetch.
    */
   window: number;
 }
@@ -274,8 +281,10 @@ export interface SearchPoiParams {
 export interface SearchPoiResult {
   /** Records Open Charge Map requested for this candidate page. */
   candidateCap: number;
-  /** Records Open Charge Map returned, before local filtering. */
+  /** Pool records before local filtering, excluding the sentinel. */
   fetched: number;
   /** Stations that survived local filtering, ordered by distance — the whole retrieved set. */
   matches: NormalizedStation[];
+  /** Whether an additional raw record proved an upstream remainder beyond the candidate pool. */
+  moreUpstream: boolean;
 }

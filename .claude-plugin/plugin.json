@@ -13,6 +13,12 @@
   "license": "Apache-2.0",
   "keywords": ["mcp", "mcp-server", "model-context-protocol", "open-charge-map", "ev-charging"],
   "userConfig": {
+    "OPENCHARGEMAP_CLAMP_LIMITS": {
+      "type": "string",
+      "title": "Clamp Page Sizes",
+      "description": "Clamp oversized positive integer page sizes to the tool maximum; false restores rejection.",
+      "default": "true"
+    },
     "OPENCHARGEMAP_API_KEY": {
       "type": "string",
       "title": "Open Charge Map API Key",
@@ -27,7 +33,8 @@
       "args": ["-y", "@cyanheads/openchargemap-mcp-server"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
-        "OPENCHARGEMAP_API_KEY": "${user_config.OPENCHARGEMAP_API_KEY}"
+        "OPENCHARGEMAP_API_KEY": "${user_config.OPENCHARGEMAP_API_KEY}",
+        "OPENCHARGEMAP_CLAMP_LIMITS": "${user_config.OPENCHARGEMAP_CLAMP_LIMITS}"
       }
     }
   }

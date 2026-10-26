@@ -25,13 +25,13 @@ describe('renderComment', () => {
   it('appends an attached link the comment text does not carry', () => {
     const line = renderComment({ user: 'driver', comment: 'Charger was dead.', relatedUrl: URL });
 
-    expect(line).toBe(`driver: Charger was dead. ${URL}`);
+    expect(line).toBe(`driver: Charger was dead. [${URL}](<${URL}>)`);
   });
 
   it('renders an attached link with no comment text', () => {
     const line = renderComment({ user: 'driver', relatedUrl: URL });
 
-    expect(line).toBe(`driver: ${URL}`);
+    expect(line).toBe(`driver: [${URL}](<${URL}>)`);
   });
 
   it('leaves no dangling separator when there is neither text nor link', () => {
@@ -39,5 +39,15 @@ describe('renderComment', () => {
 
     expect(line).toBe('driver (Charged Successfully)');
     expect(line.endsWith(':')).toBe(false);
+  });
+
+  it('keeps commenter Markdown literal and renders unsafe link schemes as text', () => {
+    expect(
+      renderComment({
+        user: '*driver*',
+        comment: '[free](https://fake.test)',
+        relatedUrl: 'javascript:alert(1)',
+      }),
+    ).toBe('\\*driver\\*: \\[free\\](https://fake.test) javascript:alert(1) (javascript:alert(1))');
   });
 });

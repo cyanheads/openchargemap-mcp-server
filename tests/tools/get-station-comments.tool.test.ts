@@ -66,7 +66,7 @@ describe('openchargemap_get_station_comments', () => {
     ['negative id', { id: -1 }],
     ['fractional id', { id: 1.5 }],
     ['zero maxresults', { id: 1, maxresults: 0 }],
-    ['maxresults above maximum', { id: 1, maxresults: 101 }],
+    ['negative maxresults', { id: 1, maxresults: -1 }],
     ['fractional maxresults', { id: 1, maxresults: 1.5 }],
   ])('rejects %s at the Zod boundary', (_label, input) => {
     expect(() => getStationComments.input.parse(input)).toThrow();
@@ -85,7 +85,7 @@ describe('openchargemap_get_station_comments', () => {
     expect(result.comments).toHaveLength(2);
     expect(result.comments[0]!.dateCreated).toBe('2025-06-01T10:00:00Z'); // newest first
     expect(result.reliabilityNote).toContain('fault');
-    expect(result.attribution).toContain('CC BY 4.0');
+    expect(result.attribution).toContain('License terms vary by provider');
     expect(result).toEqual(expect.schemaMatching(getStationComments.output));
   });
 
@@ -169,7 +169,7 @@ describe('openchargemap_get_station_comments', () => {
     // The header names both populations, so it can be read against the reliability note's ratio
     // instead of silently counting a different set.
     expect(text).toContain('1 of 2 comment(s), newest first:');
-    expect(text).toContain('1 of 2 recent comment(s) report a fault');
+    expect(text).toContain('1 of 2 comment(s) on record report a fault');
     expect(result).toEqual(expect.schemaMatching(getStationComments.output));
   });
 
@@ -203,7 +203,7 @@ describe('openchargemap_get_station_comments', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/16
-  it('scopes the not-listed count to the page it was counted over', async () => {
+  it('renders all rows on a partial page against the full-set count', async () => {
     const manyBlank = {
       ...BLANK_COMMENTS_POI,
       UserComments: [
@@ -225,10 +225,10 @@ describe('openchargemap_get_station_comments', () => {
     );
     const text = (getStationComments.format!(result)[0] as { text: string }).text;
 
-    // 4 on record, 3 on this page, 1 of those 3 carries content — every number names its own set.
+    // Four on record, three on this page, including two metadata-only rows.
     expect(result.totalComments).toBe(4);
     expect(text).toContain('3 of 4 comment(s), newest first:');
-    expect(text).toContain('(2 of these 3 not listed');
+    expect(text.split('corscheg')).toHaveLength(3);
   });
 
   it('always requests comments embedded in the POI (includecomments=true)', async () => {
@@ -309,7 +309,7 @@ describe('openchargemap_get_station_comments', () => {
     expect(text).toContain('Temporarily Unavailable');
     expect(text).toContain('Connector 1 would not start a session.');
     expect(text).toContain('Reliability:');
-    expect(text).toContain('CC BY 4.0');
+    expect(text).toContain('License terms vary by provider');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/9
@@ -365,7 +365,7 @@ describe('openchargemap_get_station_comments', () => {
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/9
-  it('names information-free comments instead of listing blank rows', async () => {
+  it('lists metadata-only comments with their author, type, and date', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([BLANK_COMMENTS_POI]));
     const result = await getStationComments.handler(
       getStationComments.input.parse({ id: 71749 }),
@@ -374,12 +374,12 @@ describe('openchargemap_get_station_comments', () => {
     const text = (getStationComments.format!(result)[0] as { text: string }).text;
 
     expect(result.comments).toHaveLength(3); // structured output keeps every row
-    expect(text).toContain('3 comment(s), none carrying text');
-    expect(text).not.toContain('corscheg');
+    expect(text).toContain('3 comment(s), newest first:');
+    expect(text.split('corscheg')).toHaveLength(4);
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/9
-  it('lists the rows that carry something and discloses the count of those that do not', async () => {
+  it('lists text and metadata-only rows together', async () => {
     const mixed = {
       ...BLANK_COMMENTS_POI,
       UserComments: [
@@ -403,7 +403,7 @@ describe('openchargemap_get_station_comments', () => {
 
     expect(result.comments).toHaveLength(4);
     expect(text).toContain('Two stalls, both free.');
-    expect(text).toContain('(3 not listed — no text, rating, or check-in outcome)');
+    expect(text.split('corscheg')).toHaveLength(4);
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/9
