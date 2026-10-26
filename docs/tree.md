@@ -1,6 +1,6 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-10-26 06:43:37
+Generated on: 2026-10-26 07:08:00
 
 ```text
 openchargemap-mcp-server/
@@ -25,6 +25,7 @@ openchargemap-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   └── design.md
