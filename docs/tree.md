@@ -1,6 +1,6 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-10-09 06:32:06
+Generated on: 2026-10-26 06:43:37
 
 ```text
 openchargemap-mcp-server/
@@ -36,6 +36,8 @@ openchargemap-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -133,6 +135,9 @@ openchargemap-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── openchargemap-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -146,6 +151,7 @@ openchargemap-mcp-server/
 │   │   │       └── station.resource.ts
 │   │   └── tools/
 │   │       └── definitions/
+│   │           ├── _page-limit.ts
 │   │           ├── _station-schema.ts
 │   │           ├── find-stations.tool.ts
 │   │           ├── get-station-comments.tool.ts
@@ -182,6 +188,7 @@ openchargemap-mcp-server/
 │       ├── get-station-comments.tool.test.ts
 │       ├── get-station.tool.test.ts
 │       ├── lookup-reference.tool.test.ts
+│       ├── station-fidelity.test.ts
 │       └── station-schema.test.ts
 ├── .dockerignore
 ├── .env.example
@@ -198,7 +205,9 @@ openchargemap-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

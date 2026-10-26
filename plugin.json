@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "openchargemap-mcp-server",
+  "version": "0.1.10",
+  "description": "Find EV charging stations worldwide by location and connector from the global Open Charge Map registry — full station detail, reference-ID resolution, and community reliability check-ins via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/openchargemap-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/openchargemap-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "open-charge-map",
+    "ev-charging",
+    "electric-vehicle",
+    "charging-stations",
+    "stdio",
+    "streamable-http"
+  ]
+}
