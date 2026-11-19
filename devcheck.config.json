@@ -13,7 +13,7 @@
     "ignorePatterns": []
   },
   "outdated": {
-    "allowlist": []
+    "allowlist": ["vitest", "@vitest/coverage-istanbul"]
   },
   "lint": {},
   "packaging": {

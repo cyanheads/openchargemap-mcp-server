@@ -2,8 +2,8 @@
 
 **Server:** openchargemap-mcp-server
 **Version:** 0.2.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
@@ -258,6 +258,8 @@ src/
     openchargemap/
       openchargemap-service.ts          # OCM POI API client (retry + session cache)
       attribution.ts                    # Provider-specific attribution + reliability-note helper
+      search-geometry.ts                # Bounding-box center, farthest point, and membership
+      route-geometry.ts                 # Route corridor buffer, polyline encoding, station position along a route
       types.ts                          # Domain types
     reference-data/
       reference-data-service.ts         # Snapshot load, lookup indices, curated aliases, optional refresh
@@ -362,6 +364,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
 | `bun run bundle` | Build, pack, and clean a `.mcpb` for one-click Claude Desktop install |
 
+**Dependency hold — `vitest` and `@vitest/coverage-istanbul` stay on `~5.0.5`.** Vitest 5.1's forks-pool watchdog calls `child.channel.unref()`, which Bun's child-process channel does not implement, so every worker fails to start under `bun run test` (`bunfig.toml` sets `[run] bun = true`). The pair is allowlisted in `devcheck.config.json` `outdated`; lift the hold once a vitest release runs the suite under Bun.
+
 **CI is one file.** `.github/workflows/codeql.yml` is the only GitHub Actions workflow: CodeQL is GitHub-owned end to end, and the file runs only while the repo's CodeQL *default setup* is turned off. Verification — `devcheck`, tests, the release gates — runs locally; don't add a workflow that re-runs it.
 
 ---
@@ -370,7 +374,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 `mcpb pack` reads `.mcpbignore`, not `.gitignore`: exclude root development paths with root-anchored patterns such as `/docs/`, while root `skills/` ships. The cleaner also strips node-gyp generator output (including local machine paths) and build-only framework files; compiled native addons remain. Rebuild old bundles after updating the cleaner.
 
-`npm run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/`, `CLAUDE.md`, `AGENTS.md`, and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. A server using DataCanvas therefore ships a portable bundle without the DuckDB native — `@duckdb/node-api` is an optional peer loaded lazily, so canvas tools report an actionable install hint and every other tool works normally. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`npm run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs — `framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package's root, and `SKILL.md` anywhere (a `skills/` deeper in a package is runtime code and stays); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/`, and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. A server using DataCanvas therefore ships a portable bundle without the DuckDB native — `@duckdb/node-api` is an optional peer loaded lazily, so canvas tools report an actionable install hint and every other tool works normally. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 
