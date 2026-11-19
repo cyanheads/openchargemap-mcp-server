@@ -1,6 +1,6 @@
 # openchargemap-mcp-server - Directory Structure
 
-Generated on: 2026-10-26 07:08:00
+Generated on: 2026-11-19 15:36:36
 
 ```text
 openchargemap-mcp-server/
@@ -162,6 +162,8 @@ openchargemap-mcp-server/
 │   │   ├── openchargemap/
 │   │   │   ├── attribution.ts
 │   │   │   ├── openchargemap-service.ts
+│   │   │   ├── route-geometry.ts
+│   │   │   ├── search-geometry.ts
 │   │   │   └── types.ts
 │   │   └── reference-data/
 │   │       ├── reference-data-service.ts
@@ -169,6 +171,7 @@ openchargemap-mcp-server/
 │   └── index.ts
 ├── tests/
 │   ├── fixtures/
+│   │   ├── ocm-corridor.ts
 │   │   └── ocm.ts
 │   ├── fuzz/
 │   │   └── openchargemap-response.fuzz.test.ts
@@ -181,7 +184,9 @@ openchargemap-mcp-server/
 │   ├── services/
 │   │   ├── attribution.test.ts
 │   │   ├── openchargemap-service.test.ts
-│   │   └── reference-data-service.test.ts
+│   │   ├── reference-data-service.test.ts
+│   │   ├── route-geometry.test.ts
+│   │   └── search-geometry.test.ts
 │   ├── smoke/
 │   │   └── definitions.smoke.test.ts
 │   └── tools/
