@@ -4,12 +4,12 @@ description: Assess EV charging options with openchargemap_* tools. Use when rec
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
 
-Use Open Charge Map to discover registered charging stations and inspect their equipment, access conditions and community check-ins. It cannot guarantee present operation or an unoccupied stall, plan a driving route, or search a global stream of fault reports. Live station calls require the server's configured Open Charge Map API key.
+Use Open Charge Map to discover registered charging stations and inspect their equipment, access conditions and community check-ins. It cannot guarantee present operation or an unoccupied stall, plan a driving route (it can search along one the caller supplies), or search a global stream of fault reports. Live station calls require the server's configured Open Charge Map API key.
 
 Place-name resolution composes with an external geocoder such as `openstreetmap_search_places`; an existing coordinate or bounding box needs no geocoding step.
 
@@ -22,9 +22,9 @@ Place-name resolution composes with an external geocoder such as `openstreetmap_
 ## Gates
 
 1. **Confirm the applied search scope before comparing results.** Read the search summary and notices. An unrecognized country code is not applied, so resolve a valid country code and repeat before describing results as country-restricted.
-2. **Check the intended connection before recommending a station.** A station can have several connector types and power ratings. Inspect the matching connection's power, status and notes with `openchargemap_get_station`, together with station access restrictions and cost. A search match does not establish that the user's connector supplies the station's highest power. Missing power, quantity or access evidence stays unknown; estimated power is not guaranteed delivery.
+2. **Check the intended connection before recommending a station.** A station can have several connector types and power ratings. Inspect the matching connection's power, status and notes with `openchargemap_get_station`, together with station access restrictions and cost (search rows carry `usageCost` when on record; absence means unknown, not free). A search match does not establish that the user's connector supplies the station's highest power. Missing power, quantity or access evidence stays unknown; estimated power is not guaranteed delivery.
 3. **Separate recent evidence from registry claims.** Compare status text, operational flags, verification dates and dated check-in outcomes before calling a charger usable. A station-level operational flag does not override an unavailable or partly operational status, or a fault on the intended connection. No comments and no reliability warning are not confirmations that charging works.
-4. **Establish coverage before claiming absence or completeness.** An empty successful response may mean no matches, an offset past the end, or no matching stations in the retrieved candidate pool. Use the notice and counts to distinguish them. Follow `nextOffset` when supplied; if the notice says upstream stations remain beyond the pool, narrow the area or add suitable filters. A retrieved count is then a floor, not the area's total. Even an exhausted registry search establishes only what OCM records for that scope.
+4. **Establish coverage before claiming absence or completeness.** An empty successful response may mean no matches, an offset past the end, or no matching stations in the retrieved candidate pool. Use the notice and counts to distinguish them. Follow `nextOffset` when supplied; if the notice says upstream stations remain beyond the pool, read its reach clause (how far from the center the retrieved stations extend, or that a route search may be missing stations anywhere along the route), then narrow the area or add suitable filters. A retrieved count is then a floor, not the area's total. Even an exhausted registry search establishes only what OCM records for that scope.
 5. **Resolve reference misses before relaxing the user's requirements.** For an empty lookup, check spelling, broaden the term or browse the category. Read `source` with `snapshotDate`: a bundled snapshot may lack a recently added operator or connector. Do not silently remove an unresolved filter or conclude the network does not exist.
 
 ## Workflows
@@ -37,10 +37,14 @@ Use `openchargemap_get_station_comments` for dated reliability evidence on the s
 
 ### Assess a known station
 
-Use the numeric station ID to get its detail, then read comments when the question concerns reliability. Comments are newest first, but the returned `reliabilityNote` evaluates the station's whole comment history, not just the displayed page. Distinguish a recent pattern from that historical summary; read further pages when the conclusion requires older evidence. An empty page with comments still on record calls for a lower offset, not a claim that nobody has reported a problem.
+Use the numeric station ID to get its detail, which also carries site and operator contact details when the user needs to reach someone (never returned for a private residence), then read comments when the question concerns reliability. Comments are newest first, but the returned `reliabilityNote` evaluates the station's whole comment history, not just the displayed page. Distinguish a recent pattern from that historical summary; read further pages when the conclusion requires older evidence. An empty page with comments still on record calls for a lower offset, not a claim that nobody has reported a problem.
+
+### Search along a route
+
+Pass the route's points in travel order (waypoints or a routing service's geometry) as `route`, with `distance` as the corridor half-width (2-10 km suits a driving corridor). Stations come back in the order a driver meets them, each with `routeDistance` along the route and `offRouteDistance` off it. A route needs at most 500 points and each leg must span less than 180° of longitude; for a long route, search it in stretches and combine by station ID. Pair `minpowerkw` and connector filters with the vehicle, then check shortlisted stops as for a nearby charger.
 
 ### Compare or enumerate an area
 
-Keep the search scope and filters fixed while following continuation offsets. Read the reported page cap and notices rather than assuming a requested page size was applied: oversized requests may be clamped. Records can shift between calls as OCM changes; deduplicate by numeric station ID when combining pages. If the candidate pool leaves upstream records unread, narrow the area and preserve the coverage limitation in any count or comparison.
+Keep the search scope and filters fixed while following continuation offsets. Read the reported page cap and notices rather than assuming a requested page size was applied: oversized requests may be clamped. Records can shift between calls as OCM changes; deduplicate by numeric station ID when combining pages. If the candidate pool leaves upstream records unread, read the notice's reach clause, narrow the area, and preserve the coverage limitation in any count or comparison.
 
-Preserve returned attribution when presenting or exporting records. Station provider license terms vary; inspect the provider information before treating records as uniformly licensed.
+Preserve returned attribution when presenting or exporting records. Station provider license terms vary: a search's text output lists them once per page, keyed by provider ID (titles are not unique), and each structured row carries its own. Inspect them before treating records as uniformly licensed.
