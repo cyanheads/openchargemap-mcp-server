@@ -18,7 +18,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
     ...actual,
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
     // Pass-through: exercise the handler/translate path once, without backoff delays.
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 
@@ -30,7 +34,17 @@ const { initReferenceDataService } = await import(
 const { initOpenChargeMapService } = await import(
   '@/services/openchargemap/openchargemap-service.js'
 );
-const { FULL_POI, SPARSE_POI, ZERO_COORD_POI, jsonResponse } = await import('../fixtures/ocm.js');
+const {
+  FULL_POI,
+  LONDON_POI,
+  SEATTLE_PORTLAND_ROUTE,
+  SEATTLE_PORTLAND_ROWS,
+  SPARSE_POI,
+  ZERO_COORD_POI,
+  contentText,
+  jsonResponse,
+  routePoi,
+} = await import('../fixtures/ocm.js');
 
 const serverConfig = {
   apiKey: 'test-key',
@@ -113,14 +127,18 @@ describe('openchargemap_find_stations', () => {
     expect((options as { headers: Record<string, string> }).headers['X-API-Key']).toBe('test-key');
   });
 
-  it('supports bounding-box search and serializes the box', async () => {
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/34
+  it('supports bounding-box search as a distance search from the box center', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
     const input = findStations.input.parse({
       boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
     });
-    await findStations.handler(input, ctx());
-    const [url] = fetchWithTimeout.mock.calls[0]!;
-    expect(decodeURIComponent(String(url))).toContain('boundingbox=(47.5,-122.5),(47.7,-122.2)');
+    const result = await findStations.handler(input, ctx());
+    const sent = new URL(String(fetchWithTimeout.mock.calls[0]![0])).searchParams;
+    expect(sent.has('boundingbox')).toBe(false);
+    expect(Number(sent.get('latitude'))).toBeCloseTo(47.6, 9);
+    expect(Number(sent.get('longitude'))).toBeCloseTo(-122.35, 9);
+    expect(result.stations.map((s) => s.id)).toEqual([145452]);
   });
 
   it('accepts pole and antimeridian coordinate boundaries', async () => {
@@ -136,7 +154,8 @@ describe('openchargemap_find_stations', () => {
     }
   });
 
-  it('preserves an antimeridian-crossing bounding box at the API boundary', async () => {
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/34
+  it('searches an antimeridian-crossing bounding box from its midpoint across ±180°', async () => {
     fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
     await findStations.handler(
       findStations.input.parse({
@@ -145,8 +164,12 @@ describe('openchargemap_find_stations', () => {
       ctx(),
     );
 
-    const url = decodeURIComponent(String(fetchWithTimeout.mock.calls[0]![0]));
-    expect(url).toContain('boundingbox=(-10,170),(10,-170)');
+    const sent = new URL(String(fetchWithTimeout.mock.calls[0]![0])).searchParams;
+    expect(sent.has('boundingbox')).toBe(false);
+    // The 20°-wide box east of 170°E and west of 170°W, not the 340° span between them.
+    expect(Number(sent.get('latitude'))).toBe(0);
+    expect(Math.abs(Number(sent.get('longitude')))).toBe(180);
+    expect(sent.get('distance')).toBe('1570.27');
   });
 
   it('accepts the maximum 500-unit radius', async () => {
@@ -156,7 +179,13 @@ describe('openchargemap_find_stations', () => {
       ctx(),
     );
 
-    expect(String(fetchWithTimeout.mock.calls[0]![0])).toContain('distance=500');
+    /**
+     * Open Charge Map reports distances on a 6,371 km sphere and draws its search circle on a
+     * 6,378.1 km one, so 500 km goes out as 500 × 6378.1 / 6371 = 500.5572 km, rounded up to three
+     * decimals (500.558) plus 0.001.
+     */
+    expect(sentSearch().get('distance')).toBe('500.559');
+    expect(sentSearch().get('distanceunit')).toBe('KM');
   });
 
   it.each([
@@ -420,6 +449,15 @@ describe('openchargemap_find_stations', () => {
     await expect(findStations.handler(input, ctx())).resolves.toMatchObject({ stations: [] });
   });
 
+  it('carries the same distance on both surfaces, rounded to hundredths', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI])); // OCM Distance 0.1445
+    const input = findStations.input.parse({ latitude: 47.6685, longitude: -122.387 });
+    const result = await findStations.handler(input, ctx());
+    const text = (findStations.format!(result)[0] as { text: string }).text;
+    expect(result.stations[0]!.distance).toBe(0.14);
+    expect(text).toContain('— 0.14 KM');
+  });
+
   it('keeps a station on the equator (single-axis zero is a real location)', async () => {
     const equatorStation: RawPoi = {
       ID: 888001,
@@ -440,6 +478,24 @@ describe('openchargemap_find_stations', () => {
     const input = findStations.input.parse({ latitude: 0.1, longitude: 32.5 });
     const result = await findStations.handler(input, ctx());
     expect(result.stations.map((s) => s.id)).toContain(888001);
+  });
+
+  it('drops placeholder records a hair off 0,0 (open ocean, no station can stand there)', async () => {
+    const nearNullIsland = (ID: number, Latitude: number, Longitude: number): RawPoi => ({
+      ...ZERO_COORD_POI,
+      ID,
+      AddressInfo: { ...ZERO_COORD_POI.AddressInfo, Latitude, Longitude, Distance: 0.01 },
+    });
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        nearNullIsland(313297, -0.0000587, -0.0000225),
+        nearNullIsland(313298, 0.02, -0.015),
+        FULL_POI,
+      ]),
+    );
+    const input = findStations.input.parse({ latitude: 0, longitude: 0, distance: 500 });
+    const result = await findStations.handler(input, ctx());
+    expect(result.stations.map((s) => s.id)).toEqual([145452]);
   });
 
   it('maps a 403 to auth_failed (fetch mock throws, as the real framework does on non-OK)', async () => {
@@ -653,7 +709,7 @@ describe('openchargemap_find_stations', () => {
     expect(enrichment.truncated).toBe(true);
     // Nothing further was retrieved, so there is no next page to point at — the notice says so.
     expect(enrichment.nextOffset).toBeUndefined();
-    expect(getEnrichment(c).notice).toMatch(/narrow the area or add filters/i);
+    expect(getEnrichment(c).notice).toMatch(/narrow the radius or add filters/i);
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/8
@@ -847,7 +903,7 @@ describe('openchargemap_find_stations', () => {
 
     expect(result.stations).toEqual([]);
     expect(getEnrichment(c).notice).toMatch(/past the last one/i);
-    expect(getEnrichment(c).notice).toMatch(/narrow the area or add filters/i);
+    expect(getEnrichment(c).notice).toMatch(/narrow the radius or add filters/i);
     expect(getEnrichment(c)).not.toHaveProperty('nextOffset');
   });
 
@@ -893,7 +949,7 @@ describe('openchargemap_find_stations', () => {
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/8
   it('does not claim more stations exist when the candidate page came back short', async () => {
     // Eight records against a 100-record candidate cap: the search retrieved everything Open
-    // Charge Map holds for the area, so "narrow the area" would be false and paging is the fix.
+    // Charge Map holds for the area, so "narrow the radius" would be false and paging is the fix.
     fetchWithTimeout.mockResolvedValue(
       jsonResponse(Array.from({ length: 8 }, (_, index) => ({ ...FULL_POI, ID: index + 1 }))),
     );
@@ -905,7 +961,7 @@ describe('openchargemap_find_stations', () => {
 
     const notice = String(getEnrichment(c).notice);
     expect(notice).toContain('8 matching stations');
-    expect(notice).not.toMatch(/narrow the area/i);
+    expect(notice).not.toMatch(/narrow the radius/i);
     expect(notice).not.toMatch(/floor/i);
     expect(notice).toContain('Pass offset 3');
   });
@@ -923,5 +979,643 @@ describe('openchargemap_find_stations', () => {
     expect(notice).toContain('500 stations retrieved');
     expect(notice).not.toContain('500 matching stations');
     expect(notice).toMatch(/floor/i);
+  });
+});
+
+/** A search row at a point, carrying the distance Open Charge Map reports for it. */
+function stationRow(id: number, latitude: number, longitude: number, distance: number): RawPoi {
+  return {
+    ...FULL_POI,
+    ID: id,
+    AddressInfo: {
+      ...FULL_POI.AddressInfo,
+      Latitude: latitude,
+      Longitude: longitude,
+      Distance: distance,
+    },
+  };
+}
+
+/** The query string of the n-th upstream request. */
+function sentSearch(call = 0): URLSearchParams {
+  return new URL(String(fetchWithTimeout.mock.calls[call]![0])).searchParams;
+}
+
+const SEATTLE_BOX = { sw_lat: 47.4, sw_lng: -122.5, ne_lat: 47.8, ne_lng: -122.1 };
+const KAMCHATKA_ALASKA_BOX = { sw_lat: 52.5, sw_lng: 158, ne_lat: 61.5, ne_lng: -150.5 };
+
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/34
+describe('openchargemap_find_stations bounding box as a distance search from its center', () => {
+  it('sends the box center and a distance reaching its farthest point, never a boundingbox', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    await findStations.handler(findStations.input.parse({ boundingbox: SEATTLE_BOX }), ctx());
+
+    const sent = sentSearch();
+    expect(sent.has('boundingbox')).toBe(false);
+    expect(Number(sent.get('latitude'))).toBeCloseTo(47.6, 9);
+    expect(Number(sent.get('longitude'))).toBeCloseTo(-122.3, 9);
+    // The farthest corner is 26.84 km away on the 6,371 km sphere Open Charge Map reports distances
+    // on; its search circle is drawn on a 6,378.1 km sphere, so the radius sent is scaled to match.
+    expect(sent.get('distance')).toBe('26.87');
+    expect(sent.get('distanceunit')).toBe('KM');
+  });
+
+  it('sizes the search in the requested distance unit', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX, distanceUnit: 'Miles' }),
+      ctx(),
+    );
+
+    expect(sentSearch().get('distance')).toBe('16.697');
+    expect(sentSearch().get('distanceunit')).toBe('Miles');
+  });
+
+  it('reaches the middle of the east and west edges of a box wider than 180°', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    // 340° wide at the equator: the edge midpoints sit 170° from the center, the corners 165.9°.
+    await findStations.handler(
+      findStations.input.parse({
+        boundingbox: { sw_lat: -10, sw_lng: -170, ne_lat: 10, ne_lng: 170 },
+      }),
+      ctx(),
+    );
+
+    expect(sentSearch().get('distance')).toBe('18924.205');
+  });
+
+  it('searches a whole-world box from its center out to the antipode and keeps every row', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        stationRow(2, -33.87, 151.2, 15_000),
+        stationRow(1, 64.13, -21.9, 7000),
+        stationRow(3, 47.6, -122.3, 13_000),
+      ]),
+    );
+    const result = await findStations.handler(
+      findStations.input.parse({
+        boundingbox: { sw_lat: -90, sw_lng: -180, ne_lat: 90, ne_lng: 180 },
+      }),
+      ctx(),
+    );
+
+    expect(Number(sentSearch().get('latitude'))).toBe(0);
+    expect(Number(sentSearch().get('longitude'))).toBe(0);
+    expect(sentSearch().get('distance')).toBe('20037.394');
+    expect(result.stations.map((s) => s.id)).toEqual([1, 3, 2]);
+  });
+
+  it('keeps stations on both sides of ±180° in a crossing box and drops rows outside it', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        stationRow(1, 53.02, 158.65, 1200), // Kamchatka, east of 180°
+        stationRow(2, 60.55, -151.25, 1500), // Kenai Peninsula, west of 180°
+        stationRow(3, 50, 179, 800), // inside the search circle, south of the box
+        stationRow(4, 39.46, -123.81, 1700), // Fort Bragg, California
+      ]),
+    );
+    const c = ctx();
+    const result = await findStations.handler(
+      findStations.input.parse({ boundingbox: KAMCHATKA_ALASKA_BOX }),
+      c,
+    );
+
+    expect(Number(sentSearch().get('latitude'))).toBe(57);
+    expect(Number(sentSearch().get('longitude'))).toBe(-176.25);
+    expect(sentSearch().get('distance')).toBe('1716.762');
+    expect(result.stations.map((s) => s.id)).toEqual([1, 2]);
+    expect(getEnrichment(c).totalCount).toBe(2);
+  });
+
+  it('reads a box whose sw_lng exceeds its ne_lng as crossing ±180°, not the opposite span', async () => {
+    // The Fiji box: the 355.5° complement of it reaches California, which the old pass-through returned.
+    fetchWithTimeout.mockResolvedValue(jsonResponse([stationRow(84178, 39.46, -123.81, 9000)]));
+    const c = ctx();
+    const result = await findStations.handler(
+      findStations.input.parse({
+        boundingbox: { sw_lat: -19.5, sw_lng: 176.5, ne_lat: -15.5, ne_lng: -179 },
+        maxresults: 2,
+      }),
+      c,
+    );
+
+    expect(Number(sentSearch().get('longitude'))).toBe(178.75);
+    expect(sentSearch().get('distance')).toBe('327.466');
+    expect(result.stations).toEqual([]);
+    expect(getEnrichment(c)).toMatchObject({ totalCount: 0 });
+    expect(getEnrichment(c).notice).toContain('No charging stations matched');
+  });
+
+  it('keeps rows outside the box out of the page, the count, and the continuation', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        stationRow(11, 47.6, -122.3, 1),
+        stationRow(21, 47.9, -122.3, 1.5), // north of the box
+        stationRow(12, 47.5, -122.2, 2),
+        stationRow(22, 47.6, -122.6, 2.5), // west of the box
+        stationRow(13, 47.79, -122.11, 3),
+      ]),
+    );
+    const first = ctx();
+    const firstPage = await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX, maxresults: 2 }),
+      first,
+    );
+    const second = ctx();
+    const secondPage = await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX, maxresults: 2, offset: 2 }),
+      second,
+    );
+
+    expect(firstPage.stations.map((s) => s.id)).toEqual([11, 12]);
+    expect(getEnrichment(first)).toMatchObject({
+      totalCount: 3,
+      truncated: true,
+      shown: 2,
+      nextOffset: 2,
+    });
+    expect(secondPage.stations.map((s) => s.id)).toEqual([13]);
+    expect(getEnrichment(second)).toMatchObject({ totalCount: 3 });
+    expect(getEnrichment(second)).not.toHaveProperty('nextOffset');
+    expect(getEnrichment(second)).not.toHaveProperty('truncated');
+  });
+
+  it('sends the same upstream request for swapped latitude corners', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    await findStations.handler(findStations.input.parse({ boundingbox: SEATTLE_BOX }), ctx());
+    await findStations.handler(
+      findStations.input.parse({ boundingbox: { ...SEATTLE_BOX, sw_lat: 47.8, ne_lat: 47.4 } }),
+      ctx(),
+    );
+
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+    expect(sentSearch(1).toString()).toBe(sentSearch(0).toString());
+  });
+
+  it('names an antimeridian crossing and the box center in the search summary', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    const crossing = await findStations.handler(
+      findStations.input.parse({ boundingbox: KAMCHATKA_ALASKA_BOX }),
+      ctx(),
+    );
+    const plain = await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX }),
+      ctx(),
+    );
+
+    expect(crossing.searchSummary).toContain('crossing the antimeridian');
+    expect(crossing.searchSummary).toContain('from its center 57,-176.25');
+    expect(plain.searchSummary).not.toContain('antimeridian');
+    expect(plain.searchSummary).toContain('from its center 47.6,-122.3');
+  });
+});
+
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/35
+describe('openchargemap_find_stations pool order and reach', () => {
+  /** `count` stations at the Seattle box center, the n-th of them n/100 km out. */
+  const ladder = (count: number, latitude = 47.6) =>
+    Array.from({ length: count }, (_, index) =>
+      stationRow(index + 1, latitude, -122.3, (index + 1) / 100),
+    );
+
+  it('orders the pool nearest first, with station id breaking distance ties', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        stationRow(9, 47.61, -122.3, 2),
+        stationRow(4, 47.59, -122.3, 2),
+        stationRow(7, 47.6, -122.3, 0.5),
+        stationRow(3, 47.65, -122.3, 5),
+      ]),
+    );
+    const result = await findStations.handler(
+      findStations.input.parse({ latitude: 47.6, longitude: -122.3 }),
+      ctx(),
+    );
+
+    expect(result.stations.map((s) => s.id)).toEqual([7, 4, 9, 3]);
+  });
+
+  it('orders bounding-box rows by their distance from the box center', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        stationRow(1, 47.7, -122.2, 12.5),
+        stationRow(2, 47.601, -122.301, 0.2),
+        stationRow(3, 47.5, -122.4, 9.1),
+      ]),
+    );
+    const result = await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX }),
+      ctx(),
+    );
+
+    expect(result.stations.map((s) => [s.id, s.distance, s.distanceUnit])).toEqual([
+      [2, 0.2, 'KM'],
+      [3, 9.1, 'KM'],
+      [1, 12.5, 'KM'],
+    ]);
+  });
+
+  it('states how far a full radius pool reaches when a 501st record proves a remainder', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse(ladder(501)));
+    const c = ctx();
+    await findStations.handler(
+      findStations.input.parse({ latitude: 47.6, longitude: -122.3, maxresults: 3 }),
+      c,
+    );
+
+    const notice = String(getEnrichment(c).notice);
+    expect(notice).toContain('The retrieved stations reach 5 of the 25 KM radius.');
+    expect(notice).toMatch(/narrow the radius or add filters/);
+  });
+
+  it('adds no reach clause when the pool came back without a remainder', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse(ladder(500)));
+    const c = ctx();
+    await findStations.handler(
+      findStations.input.parse({ latitude: 47.6, longitude: -122.3, maxresults: 3 }),
+      c,
+    );
+
+    expect(String(getEnrichment(c).notice)).not.toContain('The retrieved stations');
+  });
+
+  it('states how much of a box a full pool covers, from its center against its farthest point', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse(ladder(501)));
+    const c = ctx();
+    await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX, maxresults: 3 }),
+      c,
+    );
+
+    const notice = String(getEnrichment(c).notice);
+    expect(notice).toContain(
+      'The retrieved stations cover the box out to 5 KM from its center (47.6, -122.3); its farthest point is 26.84 KM away.',
+    );
+    expect(notice).toMatch(/split the box into smaller boxes or add filters/);
+  });
+
+  it('adds the box reach clause when no retrieved station falls inside the box', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse(ladder(501, 47.9)));
+    const c = ctx();
+    const result = await findStations.handler(
+      findStations.input.parse({ boundingbox: SEATTLE_BOX }),
+      c,
+    );
+
+    expect(result.stations).toEqual([]);
+    const notice = String(getEnrichment(c).notice);
+    expect(notice).toContain('inside the box');
+    expect(notice).toContain('The retrieved stations cover the box out to 5 KM from its center');
+  });
+
+  /**
+   * Only the area test, unusable coordinates, and minchargepoints run on the retrieved pool; every
+   * other filter ran upstream and chose which stations were retrieved. So an emptied pool is
+   * recovered by relaxing minchargepoints when it was set, and otherwise only by the remainder's own
+   * advice, never by relaxing "the other filters", which that advice contradicts ("add filters").
+   */
+  it.each([
+    ['a box with no filter', { boundingbox: SEATTLE_BOX }, undefined],
+    [
+      'a box with minchargepoints',
+      { boundingbox: SEATTLE_BOX, minchargepoints: 2 },
+      'Relax minchargepoints.',
+    ],
+  ])(
+    'recovers an emptied pool from %s without advice the remainder contradicts',
+    async (_label, input, relax) => {
+      fetchWithTimeout.mockResolvedValue(jsonResponse(ladder(501, 47.9)));
+      const c = ctx();
+      const result = await findStations.handler(findStations.input.parse(input), c);
+
+      expect(result.stations).toEqual([]);
+      const notice = String(getEnrichment(c).notice);
+      expect(notice).toContain('split the box into smaller boxes or add filters');
+      expect(notice).not.toContain('the other filters');
+      if (relax) expect(notice).toContain(relax);
+      else expect(notice).not.toContain('Relax');
+    },
+  );
+
+  it('names the box center as a bounding box search point and never says its rows lack a distance', async () => {
+    const { z } = await import('@cyanheads/mcp-ts-core');
+    const { StationSchema } = await import('@/mcp-server/tools/definitions/_station-schema.js');
+    const described = JSON.stringify([
+      findStations.description,
+      z.toJSONSchema(findStations.input),
+      z.toJSONSchema(findStations.output),
+      z.toJSONSchema(StationSchema),
+    ]);
+
+    expect(described).not.toMatch(/absent for bounding-box/i);
+    for (const field of [
+      findStations.input.shape.maxresults,
+      findStations.input.shape.offset,
+      findStations.input.shape.boundingbox,
+      findStations.output.shape.stations,
+      StationSchema.shape.distance,
+    ]) {
+      expect(field.description).toMatch(/center/i);
+    }
+  });
+});
+
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/38
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/39
+describe('openchargemap_find_stations usage fields and page-level provider terms', () => {
+  const london = { latitude: 51.5, longitude: -0.13 };
+
+  it('carries usage type ID, usage cost, address line 2, and provider ID on both surfaces', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([LONDON_POI]));
+    const result = await runToolContract(findStations, london);
+    const text = contentText(result);
+
+    expect(result.structuredContent).toMatchObject({
+      stations: [
+        { usageTypeId: 6, usageCost: 'Free', dataProviderId: 1, address: { line2: 'Soho' } },
+      ],
+    });
+    expect(text).toContain('Usage: Private - For Staff, Visitors or Customers (id 6)');
+    expect(text).toContain('Usage cost: Free');
+    expect(text).toContain('19-25 Broadwick Street, Soho, London');
+    expect(text).toContain('Data provider: Open Charge Map Contributors (id 1)');
+    // Contact fields are detail-only.
+    expect(JSON.stringify(result.structuredContent)).not.toContain('020 7247 4114');
+  });
+
+  it('carries none of those keys when OCM has none, and passes usage type ID 0 through', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        SPARSE_POI,
+        { ...LONDON_POI, UsageTypeID: 0, UsageType: { ID: 0, Title: '(Unknown)' } },
+      ]),
+    );
+    const result = await runToolContract(findStations, london);
+    // SPARSE_POI carries no distance, so it sorts after the London row.
+    const [unknownUsage, sparse] = (result.structuredContent as { stations: object[] }).stations;
+
+    for (const key of ['usageTypeId', 'usageCost', 'dataProviderId'])
+      expect(sparse).not.toHaveProperty(key);
+    expect((sparse as { address: object }).address).not.toHaveProperty('line2');
+    expect(unknownUsage).toMatchObject({ usageTypeId: 0 });
+    expect(contentText(result)).toContain('Usage: (Unknown) (id 0)');
+  });
+
+  it('lists each provider license once per page while every row keeps it in structuredContent', async () => {
+    const license = 'Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0)';
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([LONDON_POI, { ...LONDON_POI, ID: 2 }, { ...LONDON_POI, ID: 3 }]),
+    );
+    const result = await runToolContract(findStations, london);
+    const text = contentText(result);
+
+    expect(text.split(license)).toHaveLength(2);
+    expect(text).toContain(
+      `Data providers:\n  - Open Charge Map Contributors (id 1) · open data licensed: yes · Provider license: ${license}`,
+    );
+    expect(result.structuredContent).toMatchObject({
+      stations: [1, 2, 3].map(() => ({ dataProviderLicense: license, isOpenDataLicensed: true })),
+    });
+  });
+});
+
+/** Every station of a contract result's structuredContent. */
+function structuredStations(result: { structuredContent?: unknown }): Record<string, unknown>[] {
+  return (result.structuredContent as { stations: Record<string, unknown>[] }).stations;
+}
+
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/37
+describe('openchargemap_find_stations along a route', () => {
+  const seattlePortland = { route: SEATTLE_PORTLAND_ROUTE, distance: 5, levelid: 3 };
+  const respondWithCorridor = () =>
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse(SEATTLE_PORTLAND_ROWS.map((r) => routePoi(r.id, r.latitude, r.longitude))),
+    );
+
+  it.each([
+    [
+      'a center',
+      { latitude: 47.6, longitude: -122.3 },
+      'A route and a center (latitude + longitude) were supplied',
+    ],
+    ['a stray latitude', { latitude: 47.6 }, 'A route and a latitude were supplied'],
+    ['a stray longitude', { longitude: -122.3 }, 'A route and a longitude were supplied'],
+    ['a boundingbox', { boundingbox: SEATTLE_BOX }, 'A route and a boundingbox were supplied'],
+    [
+      'a latitude and a boundingbox',
+      { latitude: 47.6, boundingbox: SEATTLE_BOX },
+      'A route and a latitude and a boundingbox were supplied',
+    ],
+  ])('rejects a route sent with %s, naming what arrived', async (_label, extra, diagnosis) => {
+    const error = await thrownBy(() =>
+      findStations.handler(
+        findStations.input.parse({ route: SEATTLE_PORTLAND_ROUTE, ...extra }),
+        ctx(),
+      ),
+    );
+
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: { reason: 'invalid_location' },
+    });
+    expect(error.message).toContain(diagnosis);
+    expect(error.message).toContain('provide exactly one location');
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('accepts 2 to 500 route points and rejects fewer or more at the schema', () => {
+    const points = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ latitude: 47 + i * 1e-3, longitude: -122 }));
+
+    expect(findStations.input.safeParse({ route: points(1) }).success).toBe(false);
+    expect(findStations.input.safeParse({ route: points(2) }).success).toBe(true);
+    expect(findStations.input.safeParse({ route: points(500) }).success).toBe(true);
+    expect(findStations.input.safeParse({ route: points(501) }).success).toBe(false);
+    expect(
+      findStations.input.safeParse({ route: [{ latitude: 91, longitude: 0 }, points(1)[0]] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('pages a corridor in route order, Seattle first and Portland last, counting only corridor rows', async () => {
+    respondWithCorridor();
+    const first = ctx();
+    const firstPage = await findStations.handler(
+      findStations.input.parse({ ...seattlePortland, maxresults: 5 }),
+      first,
+    );
+    const second = ctx();
+    const secondPage = await findStations.handler(
+      findStations.input.parse({ ...seattlePortland, maxresults: 5, offset: 5 }),
+      second,
+    );
+
+    // 11 rows came back; 3 lie more than 5 km off the route and appear in no count.
+    expect(getEnrichment(first)).toMatchObject({
+      totalCount: 8,
+      truncated: true,
+      shown: 5,
+      nextOffset: 5,
+    });
+    expect(getEnrichment(second)).toMatchObject({ totalCount: 8 });
+    expect(getEnrichment(second)).not.toHaveProperty('nextOffset');
+    expect(getEnrichment(second)).not.toHaveProperty('truncated');
+    const stations = [...firstPage.stations, ...secondPage.stations];
+    expect(stations.map((s) => s.id)).toEqual([
+      380340, 380023, 379328, 379255, 249426, 233151, 376026, 6628,
+    ]);
+    const positions = stations.map((s) => s.routeDistance as number);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    for (const station of stations) expect(station.offRouteDistance).toBeLessThanOrEqual(5);
+    expect(firstPage.searchSummary).toBe(
+      'Within 5 KM of a 4-point route (248.58 KM long); levelid=3; maxresults=5.',
+    );
+    expect(sentSearch().get('polyline')).toBe('waqaHr~siVz~mBv`nBbvnDjiFvtxBwvq@');
+  });
+
+  it('carries routeDistance and offRouteDistance on both surfaces only in route mode', async () => {
+    respondWithCorridor();
+    const route = await runToolContract(findStations, { ...seattlePortland, maxresults: 1 });
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI]));
+    const radius = await runToolContract(findStations, { latitude: 47.67, longitude: -122.38 });
+    const box = await runToolContract(findStations, { boundingbox: SEATTLE_BOX });
+
+    expect(structuredStations(route)[0]).toMatchObject({
+      id: 380340,
+      routeDistance: 0,
+      offRouteDistance: 1.62,
+      distanceUnit: 'KM',
+    });
+    expect(structuredStations(route)[0]).not.toHaveProperty('distance');
+    expect(contentText(route)).toContain('Route: 0 KM along, 1.62 KM off it');
+    for (const result of [radius, box]) {
+      expect(structuredStations(result)[0]).toHaveProperty('distance');
+      expect(structuredStations(result)[0]).not.toHaveProperty('routeDistance');
+      expect(structuredStations(result)[0]).not.toHaveProperty('offRouteDistance');
+      expect(contentText(result)).not.toContain('Route:');
+    }
+  });
+
+  it('converts the corridor and reports both positions in miles', async () => {
+    respondWithCorridor();
+    const result = await runToolContract(findStations, {
+      ...seattlePortland,
+      distance: 3.1,
+      distanceUnit: 'Miles',
+    });
+
+    const olympia = structuredStations(result).find((s) => s.id === 379255)!;
+    expect(olympia).toMatchObject({ distanceUnit: 'Miles' });
+    // 2.41 km off the route, measured independently, is 1.50 miles.
+    expect(Math.abs((olympia.offRouteDistance as number) - 2.41 / 1.609344)).toBeLessThan(0.05);
+    expect(contentText(result)).toContain(
+      `Route: ${olympia.routeDistance} Miles along, ${olympia.offRouteDistance} Miles off it`,
+    );
+    expect(contentText(result)).toContain(
+      'Within 3.1 Miles of a 4-point route (154.47 Miles long)',
+    );
+    expect(sentSearch().get('distanceunit')).toBe('KM');
+  });
+
+  it('says route matches arrive newest first when a 501st record proves a remainder', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse(
+        Array.from({ length: 501 }, (_, i) => routePoi(10_000 - i, 47.6062, -122.3321 - i * 1e-4)),
+      ),
+    );
+    const c = ctx();
+    await findStations.handler(findStations.input.parse({ ...seattlePortland, maxresults: 3 }), c);
+
+    const notice = String(getEnrichment(c).notice);
+    expect(notice).toContain(
+      'Route matches arrive newest first (by descending station ID), so stations added earlier may be missing anywhere along the route.',
+    );
+    expect(notice).toContain(
+      'search shorter stretches of the route, narrow distance, or add filters',
+    );
+    expect(notice).not.toContain('The retrieved stations');
+  });
+
+  it('names the corridor when no retrieved station lies within it', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse(Array.from({ length: 501 }, (_, i) => routePoi(10_000 - i, 47.7, -122.3))),
+    );
+    const c = ctx();
+    const result = await findStations.handler(findStations.input.parse(seattlePortland), c);
+
+    expect(result.stations).toEqual([]);
+    expect(String(getEnrichment(c).notice)).toContain(
+      'No station this search retrieved lay within 5 KM of the route and met the filters.',
+    );
+  });
+
+  it('reports an empty corridor with the route echoed in the recovery notice', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    const c = ctx();
+    await findStations.handler(findStations.input.parse(seattlePortland), c);
+
+    expect(String(getEnrichment(c).notice)).toContain(
+      'No charging stations matched Within 5 KM of a 4-point route (248.58 KM long)',
+    );
+  });
+
+  it('lets a route the service cannot search fail invalid_location with its own recovery', async () => {
+    const result = await runToolContract(findStations, {
+      route: [
+        { latitude: 64.5, longitude: 177 },
+        { latitude: 64.5, longitude: -177 },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { data: { reason: 'invalid_location' } },
+    });
+    expect(contentText(result)).toContain('two routes, one on each side');
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it('fails a timed-out route search as not retryable with its own next move, on both surfaces', async () => {
+    fetchWithTimeout.mockRejectedValue(
+      new McpError(JsonRpcErrorCode.Timeout, 'Fetch timed out.', { errorSource: 'FetchTimeout' }),
+    );
+    const hint =
+      'Send the route with fewer points, or search a stretch of it with a center or a boundingbox.';
+    const route = await runToolContract(findStations, seattlePortland);
+
+    expect(route.isError).toBe(true);
+    expect(route.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', retryable: false, recovery: { hint } },
+      },
+    });
+    expect(contentText(route)).toContain(hint);
+    expect(contentText(route)).toContain('not retryable');
+
+    // A center search that times out keeps the declared retry-later recovery.
+    const radius = await runToolContract(findStations, { latitude: 47.6, longitude: -122.3 });
+    expect(radius.structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'upstream_unavailable',
+          retryable: true,
+          recovery: { hint: declaredRecovery('upstream_unavailable') },
+        },
+      },
+    });
+  });
+
+  it('applies countrycode and the other filters to a route search unchanged', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([]));
+    await findStations.handler(
+      findStations.input.parse({ ...seattlePortland, countrycode: 'ca', minpowerkw: 50 }),
+      ctx(),
+    );
+
+    expect(sentSearch().get('countrycode')).toBe('CA');
+    expect(sentSearch().get('minpowerkw')).toBe('50');
+    expect(sentSearch().get('levelid')).toBe('3');
+    expect(sentSearch().has('polyline')).toBe(true);
   });
 });

@@ -37,12 +37,12 @@ export const lookupReference = tool('openchargemap_lookup_reference', {
       .regex(/\S/, 'query must contain at least one non-whitespace character')
       .optional()
       .describe(
-        'Name, title, code, or alias to resolve (e.g. "CCS", "CHAdeMO", "Tesla", "Public", "France", "FR"). Case-insensitive, matches on title, formal name, and known aliases. Omit to browse the entire category.',
+        'Name, title, code, or alias to resolve (e.g. "CCS", "CHAdeMO", "Tesla", "Public", "France", "FR", "UK", "DC fast"). Case-insensitive; accents, spacing, and punctuation are ignored ("J-1772", "Euro plug"). Each query word must start a word of the title or formal name, in any order — including a part of a joined word ("point" finds ChargePoint), never the middle of one ("US" does not match Australia). Known aliases cover connectors, countries, and charge levels ("UK" -> United Kingdom, "DC fast" -> level 3). Omit to browse the entire category.',
       ),
     limit: pageLimitSchema(100)
       .default(25)
       .describe(
-        'Maximum entries to return when browsing or when a query matches several. Max 100; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.',
+        'Maximum entries to return when browsing or when a query matches several. Max 100; larger values are clamped to 100.',
       ),
     offset: z
       .number()

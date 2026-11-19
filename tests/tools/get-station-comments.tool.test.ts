@@ -16,7 +16,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
   return {
     ...actual,
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 

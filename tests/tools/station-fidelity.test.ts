@@ -222,6 +222,10 @@ it('shares connector and license normalization across search and resource', asyn
   expect(search.content).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ text: expect.stringContaining('Connector note') }),
+      // This provider carries no ID to key a page-level entry on, so its terms stay inline.
+      expect.objectContaining({
+        text: expect.stringContaining('Provider license: Provider terms\nopen data licensed: yes'),
+      }),
     ]),
   );
   const resource = await stationResource.handler(

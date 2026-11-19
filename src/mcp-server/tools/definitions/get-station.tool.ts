@@ -14,7 +14,7 @@ import { DetailStationSchema, renderComment, renderStationBlock } from './_stati
 export const getStation = tool('openchargemap_get_station', {
   title: 'openchargemap-mcp-server: get station',
   description:
-    'Get the full record for one Open Charge Map station by its numeric OCM ID. Returns every connection (type, level, power, current, quantity, per-connection status), the operator and network, usage and access restrictions (pay-at-location, membership, access key), the number of charge points, general comments, usage cost, the data provider, media, and verification recency. Set includeComments to also return community check-ins inline.',
+    'Get the full record for one Open Charge Map station by its numeric OCM ID. Returns every connection (type, level, power, current, quantity, per-connection status), the operator and network, usage and access restrictions (pay-at-location, membership, access key), the number of charge points, general comments, usage cost, the site and operator contact details on record (site phone and web page, operator website, phone, and fault-report email; never returned for a private residence), the data provider with its license terms, media, the date the listing was created, and verification recency. Set includeComments to also return community check-ins inline.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -101,7 +101,18 @@ export const getStation = tool('openchargemap_get_station', {
 
     if (s.generalComments)
       lines.push(`General comments: ${escapeMarkdownInline(s.generalComments)}`);
-    if (s.usageCost) lines.push(`Usage cost: ${escapeMarkdownInline(s.usageCost)}`);
+    if (s.contactPhone) lines.push(`Contact phone: ${escapeMarkdownInline(s.contactPhone)}`);
+    if (s.contactPhoneSecondary)
+      lines.push(`Secondary contact phone: ${escapeMarkdownInline(s.contactPhoneSecondary)}`);
+    if (s.relatedUrl) lines.push(`Related URL: ${markdownLink(s.relatedUrl, s.relatedUrl)}`);
+    if (s.operatorWebsite)
+      lines.push(`Operator website: ${markdownLink(s.operatorWebsite, s.operatorWebsite)}`);
+    if (s.operatorPhone) lines.push(`Operator phone: ${escapeMarkdownInline(s.operatorPhone)}`);
+    if (s.operatorFaultReportEmail)
+      lines.push(
+        `Operator fault-report email: ${escapeMarkdownInline(s.operatorFaultReportEmail)}`,
+      );
+    if (s.dateCreated) lines.push(`Listing created: ${escapeMarkdownInline(s.dateCreated)}`);
     if (s.dataProviderUrl)
       lines.push(`Data provider URL: ${markdownLink(s.dataProviderUrl, s.dataProviderUrl)}`);
     if (s.dateLastStatusUpdate)

@@ -18,7 +18,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
   return {
     ...actual,
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 
@@ -34,7 +38,9 @@ const { initOpenChargeMapService } = await import(
 const { initReferenceDataService } = await import(
   '@/services/reference-data/reference-data-service.js'
 );
-const { FULL_POI, FULL_POI_DETAIL, jsonResponse } = await import('../fixtures/ocm.js');
+const { FULL_POI, FULL_POI_DETAIL, SEATTLE_PORTLAND_ROUTE, jsonResponse } = await import(
+  '../fixtures/ocm.js'
+);
 
 const serverConfig = {
   apiKey: 'test-key',
@@ -101,6 +107,48 @@ toolContractSuite(findStations, {
       },
     },
     {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/34
+      name: 'returns a schema-valid envelope for a bounding-box search that names its center',
+      input: {
+        boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
+        maxresults: 5,
+      },
+      assert: (result) => {
+        const center = 'distances in KM from its center 47.6,-122.35';
+        const structured = result.structuredContent as {
+          searchSummary: string;
+          stations: { id: number }[];
+        };
+        expect(structured.searchSummary).toContain(center);
+        expect(structured.stations.map((s) => s.id)).toEqual([145_452, 145_453]);
+        expect(result.content?.[0]).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining(center),
+        });
+      },
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/37
+      name: 'returns a schema-valid envelope for a route search with both route positions',
+      input: { route: SEATTLE_PORTLAND_ROUTE, maxresults: 1 },
+      assert: (result) => {
+        const structured = result.structuredContent as {
+          searchSummary: string;
+          stations: { id: number; routeDistance: number; offRouteDistance: number }[];
+        };
+        expect(structured.searchSummary).toContain('Within 25 KM of a 4-point route');
+        expect(structured).toMatchObject({ totalCount: 2, truncated: true, nextOffset: 1 });
+        const [station] = structured.stations;
+        expect(station?.offRouteDistance).toBeLessThanOrEqual(25);
+        expect(result.content?.[0]).toMatchObject({
+          type: 'text',
+          text: expect.stringContaining(
+            `Route: ${station?.routeDistance} KM along, ${station?.offRouteDistance} KM off it`,
+          ),
+        });
+      },
+    },
+    {
       // https://github.com/cyanheads/openchargemap-mcp-server/issues/5
       name: 'returns the second page for the reported offset',
       input: { latitude: 47.6062, longitude: -122.3321, maxresults: 1, offset: 1 },
@@ -136,6 +184,25 @@ toolContractSuite(findStations, {
         longitude: -122.3321,
         boundingbox: { sw_lat: 47.5, sw_lng: -122.5, ne_lat: 47.7, ne_lng: -122.2 },
         maxresults: 2,
+      },
+      code: JsonRpcErrorCode.InvalidParams,
+      reason: 'invalid_location',
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/37
+      name: 'rejects a route sent with a center',
+      input: { route: SEATTLE_PORTLAND_ROUTE, latitude: 47.6062, longitude: -122.3321 },
+      code: JsonRpcErrorCode.InvalidParams,
+      reason: 'invalid_location',
+    },
+    {
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/37
+      name: 'rejects a route leg across ±180° longitude before calling Open Charge Map',
+      input: {
+        route: [
+          { latitude: 64.5, longitude: 177 },
+          { latitude: 64.5, longitude: -177 },
+        ],
       },
       code: JsonRpcErrorCode.InvalidParams,
       reason: 'invalid_location',

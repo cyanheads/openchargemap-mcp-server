@@ -16,7 +16,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
   return {
     ...actual,
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 
@@ -29,10 +33,14 @@ const { initOpenChargeMapService } = await import(
 );
 const {
   BLANK_COMMENTS_POI,
+  CONTACT_POI_DETAIL,
   FULL_POI_DETAIL,
+  LONDON_POI,
   PARTLY_OPERATIONAL_POI,
+  PRIVATE_POI_DETAIL,
   SPARSE_POI,
   ZERO_COORD_POI,
+  contentText,
   jsonResponse,
 } = await import('../fixtures/ocm.js');
 
@@ -138,6 +146,23 @@ describe('openchargemap_get_station', () => {
     expect(result.reliabilityNote).toContain('0,0'); // coordinate caveat surfaced
   });
 
+  it('flags a placeholder a few metres off 0,0 the same way search drops it', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        {
+          ...ZERO_COORD_POI,
+          AddressInfo: {
+            ...ZERO_COORD_POI.AddressInfo,
+            Latitude: -0.0000587,
+            Longitude: -0.0000225,
+          },
+        },
+      ]),
+    );
+    const result = await getStation.handler(getStation.input.parse({ id: 494804 }), ctx());
+    expect(result.reliabilityNote).toContain('placeholder, not a real location');
+  });
+
   it('maps a 403 to auth_failed (fetch mock throws)', async () => {
     fetchWithTimeout.mockRejectedValue(new McpError(JsonRpcErrorCode.Forbidden, 'HTTP 403'));
     await expect(
@@ -180,6 +205,27 @@ describe('openchargemap_get_station', () => {
         },
       },
     });
+  });
+
+  it('hands the upstream Retry-After to the caller on both surfaces', async () => {
+    // The shape fetchWithTimeout throws for a 429: the raw header value rides on data.retryAfter.
+    fetchWithTimeout.mockRejectedValue(
+      new McpError(
+        JsonRpcErrorCode.RateLimited,
+        'Fetch failed for https://api.openchargemap.io/v3/poi. Status: 429',
+        { status: 429, retryAfter: '120' },
+      ),
+    );
+    const result = await runToolContract(getStation, { id: 1 }, { context: { tenantId: 'test' } });
+
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', retryable: true, retryAfter: '120' },
+      },
+    });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text;
+    expect(text).toContain('retry after `120`');
   });
 
   it('format() renders detail fields, comments, and reliability note', async () => {
@@ -322,5 +368,97 @@ describe('openchargemap_get_station', () => {
     expect(result.station.comments).toHaveLength(3); // nothing deleted from structuredContent
     expect(text).toContain('Comments:');
     expect(text.split('corscheg')).toHaveLength(4);
+  });
+});
+
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/38
+// https://github.com/cyanheads/openchargemap-mcp-server/issues/39
+describe('openchargemap_get_station contact fields and provider terms', () => {
+  it('returns the site phone and related URL on both surfaces, the URL as a link', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([CONTACT_POI_DETAIL]));
+    const result = await runToolContract(getStation, { id: 278317 });
+    const text = contentText(result);
+
+    expect(result.structuredContent).toMatchObject({
+      station: {
+        contactPhone: '877-455-3833',
+        relatedUrl: 'https://www.evgo.com/',
+        operatorWebsite: 'https://www.evgo.com/',
+        dateCreated: '2023-09-28T05:34:00Z',
+        usageTypeId: 1,
+        dataProviderId: 1,
+      },
+    });
+    expect(text).toContain('Contact phone: 877-455-3833');
+    expect(text).toContain('Related URL: [https://www.evgo.com/](<https://www.evgo.com/>)');
+    expect(text).toContain('Operator website: [https://www.evgo.com/](<https://www.evgo.com/>)');
+    expect(text).toContain('Listing created: 2023-09-28T05:34:00Z');
+    expect(text).toContain('Usage: Public (id 1)');
+  });
+
+  it('renders the operator phone, fault-report email, and secondary phone as plain text', async () => {
+    fetchWithTimeout.mockResolvedValue(
+      jsonResponse([
+        {
+          ...LONDON_POI,
+          AddressInfo: { ...LONDON_POI.AddressInfo, ContactTelephone2: '+44 (0)20 *ext* 7' },
+        },
+      ]),
+    );
+    const result = await runToolContract(getStation, { id: 67840 });
+    const text = contentText(result);
+
+    expect(result.structuredContent).toMatchObject({
+      station: {
+        contactPhoneSecondary: '+44 (0)20 *ext* 7',
+        operatorPhone: '020 7247 4114',
+        operatorFaultReportEmail: 'enquiries@pod-point.com',
+        address: { line2: 'Soho' },
+        usageCost: 'Free',
+      },
+    });
+    expect(text).toContain('Secondary contact phone: +44 (0)20 \\*ext\\* 7');
+    expect(text).toContain('Operator phone: 020 7247 4114');
+    expect(text).toContain('Operator fault-report email: enquiries@pod-point.com');
+    expect(text).toContain(
+      'Operator website: [http://www.pod-point.com/](<http://www.pod-point.com/>)',
+    );
+    expect(text).toContain('19-25 Broadwick Street, Soho, London');
+  });
+
+  it('omits every phone, URL, and email for a private-individual station on both surfaces', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([PRIVATE_POI_DETAIL]));
+    const result = await runToolContract(getStation, { id: 496719 });
+    const serialized = JSON.stringify(result);
+
+    for (const value of [
+      '9802565500',
+      'hyattplace.charlotte@dalyseven.com',
+      'hyatt.com',
+      'Contact phone',
+      'Related URL',
+    ])
+      expect(serialized).not.toContain(value);
+    expect(result.structuredContent).toMatchObject({
+      station: { operatorId: 44, usageCost: '$.30 per KWh, plus $5 per hour idle fee' },
+    });
+  });
+
+  it('renders the usage cost once, in the shared station block', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([FULL_POI_DETAIL]));
+    const text = contentText(await runToolContract(getStation, { id: 145452 }));
+
+    expect(text.split('Usage cost:')).toHaveLength(2);
+    expect(text).toContain('Usage cost: $0.30/kWh');
+  });
+
+  it('names the provider with its ID and keeps its license and open-data flag inline', async () => {
+    fetchWithTimeout.mockResolvedValue(jsonResponse([CONTACT_POI_DETAIL]));
+    const text = contentText(await runToolContract(getStation, { id: 278317 }));
+
+    expect(text).toContain(
+      'Data provider: Open Charge Map Contributors (id 1)\nProvider license: Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0)\nopen data licensed: yes',
+    );
+    expect(text).not.toContain('Data providers:');
   });
 });

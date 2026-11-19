@@ -14,6 +14,10 @@ import { statusAvailability } from '@/services/openchargemap/attribution.js';
 export const AddressSchema = z
   .object({
     line1: z.string().optional().describe('Street address line.'),
+    line2: z
+      .string()
+      .optional()
+      .describe('Second address line (e.g. a district or building). Absent when none on record.'),
     town: z.string().optional().describe('Town or city.'),
     stateOrProvince: z.string().optional().describe('State or province.'),
     postcode: z.string().optional().describe('Postal/ZIP code.'),
@@ -129,8 +133,25 @@ export const StationSchema = z
     distance: z
       .number()
       .optional()
-      .describe('Distance from the search point. Absent for bounding-box searches.'),
-    distanceUnit: z.enum(['KM', 'Miles']).optional().describe('Unit of the distance value.'),
+      .describe(
+        'Distance from the search point: the center of a radius search or of a bounding box. Absent along a route, which reports routeDistance and offRouteDistance instead.',
+      ),
+    routeDistance: z
+      .number()
+      .optional()
+      .describe(
+        "Route searches only: distance along the route from its first point to the station's nearest point on the route — the order a driver meets stations.",
+      ),
+    offRouteDistance: z
+      .number()
+      .optional()
+      .describe(
+        'Route searches only: distance from the station to its nearest point on the route — the detour off it. At most the requested distance.',
+      ),
+    distanceUnit: z
+      .enum(['KM', 'Miles'])
+      .optional()
+      .describe('Unit of distance, routeDistance, and offRouteDistance.'),
     operator: z
       .string()
       .optional()
@@ -146,6 +167,18 @@ export const StationSchema = z
       .optional()
       .describe(
         'Access/usage type title (e.g. "Public", "Public - Pay At Location"). Absent when OCM has no usage type.',
+      ),
+    usageTypeId: z
+      .number()
+      .optional()
+      .describe(
+        'Usage type ID — the value the openchargemap_find_stations usagetypeid filter takes. 0 is OCM\'s "(Unknown)" type. Absent when OCM has no usage type on record.',
+      ),
+    usageCost: z
+      .string()
+      .optional()
+      .describe(
+        'Free-text cost description as recorded (e.g. "£0.30/kWh"). Often absent — absence means unknown, not free.',
       ),
     isPayAtLocation: z
       .boolean()
@@ -203,6 +236,12 @@ export const StationSchema = z
       .string()
       .optional()
       .describe('Source that provided the listing (e.g. "afdc.energy.gov").'),
+    dataProviderId: z
+      .number()
+      .optional()
+      .describe(
+        'OCM data provider ID. Provider titles are not unique — two providers can share one with different license terms — so the ID is what identifies the provider.',
+      ),
   })
   .describe('A charging station record.');
 
@@ -210,21 +249,55 @@ export const StationSchema = z
 export type Station = z.infer<typeof StationSchema>;
 
 /**
- * The full station record: the shared station shape plus the fields OCM populates only on a
- * `verbose=true` detail fetch. Shared by openchargemap_get_station and the station resource, which
- * serve the same record from the same normalizer.
+ * The full station record: the shared station shape plus the fields only the single-station lookup
+ * returns. Shared by openchargemap_get_station and the station resource, which serve the same record
+ * from the same normalizer.
  */
 export const DetailStationSchema = StationSchema.extend({
   generalComments: z
     .string()
     .optional()
     .describe('Operator/free-text notes about the station. Absent when none on record.'),
-  usageCost: z
+  contactPhone: z
     .string()
     .optional()
     .describe(
-      'Free-text cost description (e.g. "£0.30/kWh"). Often absent — absence means unknown, not free.',
+      'Site contact phone, free text as recorded. Absent when none on record or when the station is a private residence.',
     ),
+  contactPhoneSecondary: z
+    .string()
+    .optional()
+    .describe(
+      'Second site contact, free text as recorded (occasionally an email address). Absent when none on record or when the station is a private residence.',
+    ),
+  relatedUrl: z
+    .string()
+    .optional()
+    .describe(
+      'Web page for the site (network or venue page). Absent when none on record or when the station is a private residence.',
+    ),
+  operatorWebsite: z
+    .string()
+    .optional()
+    .describe(
+      "Operator network's website. Absent when none on record or when the station is a private residence.",
+    ),
+  operatorPhone: z
+    .string()
+    .optional()
+    .describe(
+      "Operator network's primary contact phone. Absent when none on record or when the station is a private residence.",
+    ),
+  operatorFaultReportEmail: z
+    .string()
+    .optional()
+    .describe(
+      "Operator network's address for reporting a faulty charger. Absent when none on record or when the station is a private residence.",
+    ),
+  dateCreated: z
+    .string()
+    .optional()
+    .describe('ISO 8601 timestamp the listing was added to Open Charge Map.'),
   dataProviderUrl: z.string().optional().describe('Source provider website.'),
   dateLastStatusUpdate: z
     .string()
@@ -283,16 +356,43 @@ function renderConnection(c: Station['connections'][number]): string {
   return c.quantity != null ? `${head} ×${c.quantity}` : head;
 }
 
-/** Render one station as a markdown block. Shared by find/detail format() so parity holds. */
-export function renderStationBlock(s: Station): string {
+/**
+ * `Title (id N)`, `Title`, or `id N` — whichever parts OCM gave, so an ID still renders when its
+ * title is missing. Undefined when it gave neither.
+ */
+function titledId(title: string | undefined, id: number | undefined): string | undefined {
+  const idText = id === undefined ? undefined : `id ${id}`;
+  if (!title) return idText;
+  return idText ? `${escapeMarkdownInline(title)} (${idText})` : escapeMarkdownInline(title);
+}
+
+/** The provider's license line; `unspecified` when the provider gave no terms. */
+function renderProviderLicense(s: Station): string {
+  return `Provider license: ${s.dataProviderLicense ? escapeMarkdownInline(s.dataProviderLicense) : 'unspecified'}`;
+}
+
+/**
+ * Render one station as a markdown block. `providerTerms: 'page'` leaves the provider's license and
+ * open-data flag to the page-level block {@link renderStationPage} appends; the detail tool keeps
+ * them inline.
+ */
+export function renderStationBlock(
+  s: Station,
+  providerTerms: 'inline' | 'page' = 'inline',
+): string {
   const lines: string[] = [];
-  const dist = s.distance != null ? ` — ${s.distance.toFixed(2)} ${s.distanceUnit ?? 'KM'}` : '';
+  const unit = s.distanceUnit ?? 'KM';
+  const dist = s.distance != null ? ` — ${s.distance.toFixed(2)} ${unit}` : '';
   lines.push(
     `**${escapeMarkdownInline(s.title)}**${dist}  _(id ${s.id}, uuid ${escapeMarkdownInline(s.uuid)})_`,
   );
+  // A route search's two positions arrive together, already rounded to hundredths.
+  if (s.routeDistance != null)
+    lines.push(`Route: ${s.routeDistance} ${unit} along, ${s.offRouteDistance} ${unit} off it`);
 
   const addrBits = [
     s.address.line1,
+    s.address.line2,
     s.address.town,
     s.address.stateOrProvince,
     s.address.postcode,
@@ -307,11 +407,10 @@ export function renderStationBlock(s: Station): string {
     lines.push(`Access: ${escapeMarkdownInline(s.address.accessComments)}`);
 
   const opUsage: string[] = [];
-  if (s.operator)
-    opUsage.push(
-      `Operator: ${escapeMarkdownInline(s.operator)}${s.operatorId != null ? ` (id ${s.operatorId})` : ''}`,
-    );
-  if (s.usageType) opUsage.push(`Usage: ${escapeMarkdownInline(s.usageType)}`);
+  const operator = titledId(s.operator, s.operatorId);
+  if (operator) opUsage.push(`Operator: ${operator}`);
+  const usage = titledId(s.usageType, s.usageTypeId);
+  if (usage) opUsage.push(`Usage: ${usage}`);
   const accessFlags = [
     renderFlag(s.isPayAtLocation, 'pay at location'),
     renderFlag(s.isMembershipRequired, 'membership required'),
@@ -319,14 +418,16 @@ export function renderStationBlock(s: Station): string {
   ].filter(Boolean);
   if (accessFlags.length) opUsage.push(accessFlags.join(', '));
   if (opUsage.length) lines.push(opUsage.join(' · '));
+  if (s.usageCost) lines.push(`Usage cost: ${escapeMarkdownInline(s.usageCost)}`);
 
   if (s.numberOfPoints != null) lines.push(`Charge points: ${s.numberOfPoints}`);
-  if (s.dataProvider) lines.push(`Data provider: ${escapeMarkdownInline(s.dataProvider)}`);
-  lines.push(
-    `Provider license: ${s.dataProviderLicense ? escapeMarkdownInline(s.dataProviderLicense) : 'unspecified'}`,
-  );
-  const openLicense = renderFlag(s.isOpenDataLicensed, 'open data licensed');
-  if (openLicense) lines.push(openLicense);
+  const provider = titledId(s.dataProvider, s.dataProviderId);
+  if (provider) lines.push(`Data provider: ${provider}`);
+  if (providerTerms === 'inline') {
+    lines.push(renderProviderLicense(s));
+    const openLicense = renderFlag(s.isOpenDataLicensed, 'open data licensed');
+    if (openLicense) lines.push(openLicense);
+  }
 
   if (s.connections.length > 0) {
     lines.push('Connections:');
@@ -338,6 +439,38 @@ export function renderStationBlock(s: Station): string {
   lines.push(renderStatusLine(s));
 
   return lines.join('\n');
+}
+
+/**
+ * Render a page of search results as blocks: each station, then one `Data providers` entry per
+ * provider ID carrying its license and open-data flag, so terms every row shares appear once rather
+ * than once per station. The key is the ID because provider titles are not unique. A station with no
+ * provider ID, or whose terms differ from the entry already listed under its ID, keeps its terms
+ * inline — no station's license is left out of the text.
+ */
+export function renderStationPage(stations: readonly Station[]): string[] {
+  const listed = new Map<number, Station>();
+  const blocks: string[] = [];
+  for (const s of stations) {
+    const id = s.dataProviderId;
+    if (id === undefined) {
+      blocks.push(renderStationBlock(s));
+      continue;
+    }
+    const entry = listed.get(id) ?? s;
+    listed.set(id, entry);
+    const sharesEntry =
+      entry.dataProviderLicense === s.dataProviderLicense &&
+      entry.isOpenDataLicensed === s.isOpenDataLicensed;
+    blocks.push(renderStationBlock(s, sharesEntry ? 'page' : 'inline'));
+  }
+  if (listed.size === 0) return blocks;
+
+  const entries = [...listed].map(([id, s]) => {
+    const openLicense = renderFlag(s.isOpenDataLicensed, 'open data licensed');
+    return `  - ${titledId(s.dataProvider, id)}${openLicense ? ` · ${openLicense}` : ''} · ${renderProviderLicense(s)}`;
+  });
+  return [...blocks, ['Data providers:', ...entries].join('\n')];
 }
 
 /**

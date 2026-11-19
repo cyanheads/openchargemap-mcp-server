@@ -15,7 +15,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
   return {
     ...actual,
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 
@@ -64,6 +68,35 @@ describe('openchargemap://station/{id}', () => {
     // A client may hold the record for this long; the service serves its own cached copy for 600s,
     // so a longer hint would let a reader see something a second read would not have returned.
     expect(stationResource.cacheHint?.ttlMs).toBe(600_000);
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/38
+  it('carries the contact fields through the output parse, and omits them for a private individual', async () => {
+    const { CONTACT_POI_DETAIL, PRIVATE_POI_DETAIL } = await import('../fixtures/ocm.js');
+    fetchWithTimeout.mockResolvedValueOnce(jsonResponse([CONTACT_POI_DETAIL]));
+    const evgo = await stationResource.handler(
+      { id: '278317' },
+      ctx('openchargemap://station/278317'),
+    );
+    // The framework serves the parsed value, and an object schema drops keys it does not declare.
+    expect(stationResource.output?.parse(evgo)).toMatchObject({
+      station: {
+        contactPhone: '877-455-3833',
+        relatedUrl: 'https://www.evgo.com/',
+        dateCreated: '2023-09-28T05:34:00Z',
+        usageTypeId: 1,
+        dataProviderId: 1,
+      },
+    });
+
+    fetchWithTimeout.mockResolvedValueOnce(jsonResponse([PRIVATE_POI_DETAIL]));
+    const privateStation = await stationResource.handler(
+      { id: '496719' },
+      ctx('openchargemap://station/496719'),
+    );
+    expect(JSON.stringify(stationResource.output?.parse(privateStation))).not.toMatch(
+      /9802565500|dalyseven|hyatt\.com/,
+    );
   });
 
   it('throws not_found when the station does not exist (empty array)', async () => {

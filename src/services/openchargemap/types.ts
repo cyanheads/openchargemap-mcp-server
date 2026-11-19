@@ -47,10 +47,11 @@ export interface RawAddressInfo {
   AddressLine1?: string | null;
   AddressLine2?: string | null;
   ContactTelephone1?: string | null;
+  ContactTelephone2?: string | null;
   Country?: RawCountry | null;
   CountryID?: number | null;
   Distance?: number | null;
-  /** Integer enum: 1 = KM, 2 = Miles. Absent for bounding-box searches. */
+  /** Integer enum: 1 = KM, 2 = Miles. Absent, like `Distance`, on polyline (route) searches. */
   DistanceUnit?: number | null;
   ID?: number;
   Latitude?: number;
@@ -64,7 +65,14 @@ export interface RawAddressInfo {
 
 /** Raw OCM operator object. */
 export interface RawOperatorInfo {
+  FaultReportEmail?: string | null;
   ID?: number;
+  /**
+   * True for an operator that is a home owner or private individual. OCM sets it on one operator,
+   * 44 "(Private Residence/Individual)"; it gates every phone, URL, and email the detail returns.
+   */
+  IsPrivateIndividual?: boolean | null;
+  PhonePrimaryContact?: string | null;
   Title?: string | null;
   WebsiteURL?: string | null;
 }
@@ -138,6 +146,8 @@ export interface RawPoi {
   AddressInfo?: RawAddressInfo | null;
   Connections?: RawConnection[] | null;
   DataProvider?: RawDataProvider | null;
+  DataProviderID?: number | null;
+  DateCreated?: string | null;
   DateLastStatusUpdate?: string | null;
   DateLastVerified?: string | null;
   GeneralComments?: string | null;
@@ -168,6 +178,7 @@ export interface NormalizedAddress {
   countryCode?: string;
   latitude: number;
   line1?: string;
+  line2?: string;
   longitude: number;
   postcode?: string;
   stateOrProvince?: string;
@@ -215,6 +226,7 @@ export interface NormalizedStation {
   address: NormalizedAddress;
   connections: NormalizedConnection[];
   dataProvider?: string;
+  dataProviderId?: number;
   dataProviderLicense?: string;
   dateLastVerified?: string | null;
   distance?: number;
@@ -227,51 +239,133 @@ export interface NormalizedStation {
   isPayAtLocation?: boolean;
   isRecentlyVerified?: boolean;
   numberOfPoints?: number;
+  /** Route searches only: from the station to its nearest point on the route, in `distanceUnit`. */
+  offRouteDistance?: number;
   operator?: string;
   operatorId?: number;
+  /**
+   * Route searches only: along the route from its first point to the station's nearest point on
+   * it, in `distanceUnit`.
+   */
+  routeDistance?: number;
   status?: string;
   statusTypeId?: number;
   title: string;
+  usageCost?: string;
   usageType?: string;
+  usageTypeId?: number;
   uuid: string;
 }
 
-/** Detail-only fields layered on top of {@link NormalizedStation} by `get_station`. */
+/**
+ * Detail-only fields layered on top of {@link NormalizedStation} by `get_station`. The six contact
+ * fields are omitted whenever the operator is a private individual.
+ */
 export interface NormalizedStationDetail extends NormalizedStation {
   comments?: NormalizedComment[];
+  contactPhone?: string;
+  contactPhoneSecondary?: string;
   dataProviderUrl?: string;
+  dateCreated?: string;
   dateLastStatusUpdate?: string | null;
   generalComments?: string;
   media?: { url: string; comment?: string }[];
+  operatorFaultReportEmail?: string;
+  operatorPhone?: string;
+  operatorWebsite?: string;
+  relatedUrl?: string;
   submissionStatus?: string;
-  usageCost?: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Search parameters and results.                                     *
+ * ------------------------------------------------------------------ */
+
+/** The unit a search measures its radius and its stations' distances in. */
+export type DistanceUnit = 'KM' | 'Miles';
+
 /**
- * Parameters accepted by `OpenChargeMapService.searchPois`. Location fields are mode-dependent
- * (radius vs bbox) — the caller supplies exactly one mode and the service guards each before
- * serializing, so they tolerate `undefined`.
+ * A latitude/longitude rectangle, edges included. The latitude corners may come in either order;
+ * `sw_lng > ne_lng` reads as a box that crosses ±180°.
  */
+export interface BoundingBox {
+  ne_lat: number;
+  ne_lng: number;
+  sw_lat: number;
+  sw_lng: number;
+}
+
+/** One point of a route, in WGS84 decimal degrees. */
+export interface RoutePoint {
+  latitude: number;
+  longitude: number;
+}
+
+/** Where a search looks — one member per location mode. */
+export type SearchLocation =
+  | {
+      mode: 'radius';
+      latitude: number;
+      longitude: number;
+      distance: number;
+      distanceUnit: DistanceUnit;
+    }
+  | { mode: 'box'; box: BoundingBox; distanceUnit: DistanceUnit }
+  | {
+      mode: 'route';
+      /** The route's points in travel order, 2 or more. */
+      route: RoutePoint[];
+      /** Corridor half-width: how far from the route a station may sit. */
+      distance: number;
+      distanceUnit: DistanceUnit;
+    };
+
+/** Parameters accepted by `OpenChargeMapService.searchPois`: one location plus optional filters. */
 export interface SearchPoiParams {
-  boundingbox?: { sw_lat: number; sw_lng: number; ne_lat: number; ne_lng: number } | undefined;
   connectiontypeid?: number | number[];
   countrycode?: string;
-  distance?: number | undefined;
-  distanceUnit?: 'KM' | 'Miles' | undefined;
-  latitude?: number | undefined;
   levelid?: number | number[];
-  longitude?: number | undefined;
+  location: SearchLocation;
   minchargepoints?: number;
   minpowerkw?: number;
   operatorid?: number | number[];
   statustypeid?: number | number[];
   usagetypeid?: number | number[];
-  /**
-   * End of the caller's result window (`offset + page size`), excluded from the cache key.
-   * Every window reads the same fixed candidate pool; this never sizes the upstream fetch.
-   */
-  window: number;
 }
+
+/**
+ * The search as the service ran it, in the search's unit. A radius search is its own circle; a box is
+ * searched from its center out to its farthest point, and carries both; a route carries its corridor
+ * half-width and its length.
+ */
+export type SearchArea =
+  | {
+      mode: 'radius';
+      latitude: number;
+      longitude: number;
+      distance: number;
+      distanceUnit: DistanceUnit;
+    }
+  | {
+      mode: 'box';
+      box: BoundingBox;
+      /** True when the box spans ±180° longitude (`sw_lng > ne_lng`). */
+      crossesAntimeridian: boolean;
+      /** Distance from the box center to the farthest point of the box. */
+      distance: number;
+      distanceUnit: DistanceUnit;
+      latitude: number;
+      longitude: number;
+    }
+  | {
+      mode: 'route';
+      route: RoutePoint[];
+      /** Corridor half-width. */
+      distance: number;
+      distanceUnit: DistanceUnit;
+      /** Length of the route along its legs. */
+      length: number;
+    };
 
 /**
  * What one `searchPois` call retrieved. The caller slices its own window out of `matches`; the
@@ -279,12 +373,23 @@ export interface SearchPoiParams {
  * local filters emptied, and disclose that more may sit past what was retrieved.
  */
 export interface SearchPoiResult {
+  /** The search as it ran, including a box's center and farthest-point distance. */
+  area: SearchArea;
   /** Records Open Charge Map requested for this candidate page. */
   candidateCap: number;
   /** Pool records before local filtering, excluding the sentinel. */
   fetched: number;
-  /** Stations that survived local filtering, ordered by distance — the whole retrieved set. */
+  /**
+   * Stations that survived local filtering — the whole retrieved set, nearest first (in route
+   * order along a route), with station `id` breaking ties.
+   */
   matches: NormalizedStation[];
   /** Whether an additional raw record proved an upstream remainder beyond the candidate pool. */
   moreUpstream: boolean;
+  /**
+   * Distance of the farthest pool record from the search point, before local filters, in the
+   * search's unit. Open Charge Map returns the nearest records first, so every station closer than
+   * this is in the pool. Absent when no pool record carries a distance, as in a route search.
+   */
+  reach?: number;
 }

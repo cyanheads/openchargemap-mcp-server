@@ -19,7 +19,7 @@ export const pageLimitSchema = (cap: number) =>
     .int()
     .min(1)
     .refine((value) => clampLimitsEnabled() || value <= cap, {
-      message: `Must be at most ${cap} when OPENCHARGEMAP_CLAMP_LIMITS=false.`,
+      message: `Must be at most ${cap}.`,
     });
 
 /** Apply a validated page size once and return a notice that composes with result guidance. */

@@ -1,8 +1,8 @@
 /**
  * @fileoverview Reference-data service — resolves Open Charge Map reference names/codes to the
  * integer IDs that POI filters key on, served from a bundled snapshot (offline, zero-latency).
- * Builds per-category lookup indices (exact-ID, normalized-title, curated connector aliases) at
- * init, with an optional startup refresh from the live `/v3/referencedata` endpoint that falls
+ * Builds per-category lookup indices (ID, word starts, separator-free exact keys, curated aliases)
+ * at init, with an optional startup refresh from the live `/v3/referencedata` endpoint that falls
  * back to the bundled snapshot on any failure.
  * @module services/reference-data/reference-data-service
  */
@@ -32,17 +32,139 @@ const FILTER_PARAM: Partial<Record<ReferenceCategory, string>> = {
 };
 
 /**
- * Curated aliases for the connectors agents actually name → connection-type IDs, in priority order.
- * Each token resolves to one or more IDs; the first ID listed ranks first in results.
+ * Latin letters Unicode gives no decomposition, folded to their unaccented base so "Gronn" meets
+ * "Grønn". Capitals map to a capital then lowercase, so no CamelCase start appears inside them.
  */
-const CONNECTOR_ALIASES = new Map<string, number[]>([
+const LATIN_BASE = new Map([
+  ['ø', 'o'],
+  ['Ø', 'O'],
+  ['ı', 'i'],
+  ['ł', 'l'],
+  ['Ł', 'L'],
+  ['đ', 'd'],
+  ['Đ', 'D'],
+  ['ð', 'd'],
+  ['Ð', 'D'],
+  ['ħ', 'h'],
+  ['Ħ', 'H'],
+  ['ŧ', 't'],
+  ['Ŧ', 'T'],
+  ['æ', 'ae'],
+  ['Æ', 'Ae'],
+  ['œ', 'oe'],
+  ['Œ', 'Oe'],
+  ['ß', 'ss'],
+  ['þ', 'th'],
+  ['Þ', 'Th'],
+]);
+const LATIN_BASE_PATTERN = new RegExp(`[${[...LATIN_BASE.keys()].join('')}]`, 'gu');
+
+/**
+ * Fold text for matching: compatibility-decompose, drop the combining diacritics of Latin, Greek,
+ * and Cyrillic (U+0300–U+036F) so "Rhône" and "Rhone" meet, then map {@link LATIN_BASE}. Other
+ * combining marks stay — scripts that write vowels as marks (Devanagari, Thai) would otherwise
+ * split mid-word.
+ */
+function fold(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u{300}-\u{36f}]/gu, '')
+    .replace(LATIN_BASE_PATTERN, (letter) => LATIN_BASE.get(letter) ?? letter);
+}
+
+/** Whitespace and punctuation: everything that is not a letter, combining mark, or number. */
+const SEPARATORS = /[^\p{L}\p{M}\p{N}]+/u;
+
+/** Folded, original-case words of `text`, delimited by whitespace and punctuation. */
+function casedWords(text: string): string[] {
+  return fold(text).split(SEPARATORS).filter(Boolean);
+}
+
+/**
+ * Case-insensitive form of a folded word. Greek final sigma becomes σ, so a query ending in Σ
+ * (lowercased to ς) still prefixes a longer word. After {@link fold} no code point changes UTF-16
+ * length under `toLowerCase`, so offsets found in the cased word index the lowered one.
+ */
+function lower(word: string): string {
+  return word.toLowerCase().replaceAll('ς', 'σ');
+}
+
+/** Lowercase query words, in order. Empty when the text has no letter or number. */
+function queryWords(text: string): string[] {
+  return casedWords(text).map(lower);
+}
+
+/** Separator-free lowercase form — the key for exact and alias comparisons. */
+function compactKey(text: string): string {
+  return queryWords(text).join('');
+}
+
+type CharKind = 'upper' | 'lower' | 'caseless' | 'number' | 'mark';
+
+function charKind(char: string): CharKind {
+  if (/\p{Lu}/u.test(char)) return 'upper';
+  if (/\p{Ll}/u.test(char)) return 'lower';
+  if (/\p{L}/u.test(char)) return 'caseless';
+  if (/\p{N}/u.test(char)) return 'number';
+  return 'mark';
+}
+
+/**
+ * UTF-16 offsets inside an original-case word where a sub-word starts: lowercase→uppercase
+ * (Charge·Point), acronym→word (EV·Power), and letter↔number (J·1772, 2·kW). Combining marks are
+ * skipped when comparing neighbours. Caseless letters (Arabic, CJK, Devanagari) never start a
+ * case transition, so a run in a script without case stays one sub-word.
+ */
+function subWordStarts(word: string): number[] {
+  const chars: { at: number; kind: CharKind }[] = [];
+  let at = 0;
+  for (const char of word) {
+    const kind = charKind(char);
+    if (kind !== 'mark') chars.push({ at, kind });
+    at += char.length;
+  }
+  const starts: number[] = [];
+  chars.forEach(({ at, kind }, i) => {
+    const prev = chars[i - 1]?.kind;
+    const next = chars[i + 1]?.kind;
+    if (
+      prev !== undefined &&
+      ((prev === 'number') !== (kind === 'number') ||
+        (prev === 'lower' && kind === 'upper') ||
+        (prev === 'upper' && kind === 'upper' && next === 'lower'))
+    )
+      starts.push(at);
+  });
+  return starts;
+}
+
+/** Build an alias map keyed by the separator-free form of each readable key. */
+function aliasMap<T>(entries: [string, T[]][]): Map<string, T[]> {
+  return new Map(entries.map(([key, targets]) => [compactKey(key), targets]));
+}
+
+/*
+ * Curated aliases → targets in priority order; the first target listed ranks first. Keys compare
+ * separator-free ("type2", "U.K.", "CHA-de-MO" reach their keys). Each is a `Map`, so prototype
+ * names such as `constructor` fall through to ordinary matching.
+ */
+
+/** Connector names agents actually use → connection-type IDs. */
+const CONNECTOR_ALIASES = aliasMap<number>([
   ['j1772', [1]],
   ['type 1', [1]],
   ['ccs', [33, 32]],
-  ['ccs type 2', [33]],
+  ['ccs1', [32]],
   ['ccs type 1', [32]],
+  ['combo 1', [32]],
+  ['ccs combo 1', [32]],
+  ['ccs2', [33]],
+  ['ccs type 2', [33]],
+  ['combo 2', [33]],
+  ['ccs combo 2', [33]],
   ['ccs combo', [33, 32]],
   ['combo', [33, 32]],
+  ['tesla', [27]], // the current connector, ahead of the discontinued Roadster (8)
   ['supercharger', [27]],
   ['tesla supercharger', [27]],
   ['nacs', [27]],
@@ -52,6 +174,34 @@ const CONNECTOR_ALIASES = new Map<string, number[]>([
   ['chademo', [2]],
   ['chaoji', [1044]],
 ]);
+
+/** Charge-level names → level IDs. Level 3 is the only fast-charge-capable level. */
+const LEVEL_ALIASES = aliasMap<number>([
+  ['fast', [3]],
+  ['dc fast', [3]],
+  ['dcfc', [3]],
+]);
+
+/** Common country names OCM titles differently → ISO codes, resolved against the active data. */
+const COUNTRY_ALIASES = aliasMap<string>([
+  ['uk', ['GB']],
+  ['great britain', ['GB']],
+  ['britain', ['GB']],
+  ['england', ['GB']],
+  ['scotland', ['GB']],
+  ['wales', ['GB']],
+  ['northern ireland', ['GB']],
+  ['usa', ['US']],
+  ['united states of america', ['US']],
+  ['holland', ['NL']],
+  ['south korea', ['KR']],
+  ['north korea', ['KP']],
+]);
+
+/** Rank tiers, best first. Alias hits rank by their position in the alias list, below `EXACT`. */
+const RANK_EXACT = 1000;
+const RANK_WHOLE_WORDS = 2000;
+const RANK_WORD_START = 3000;
 
 /** OCM categories the live `/referencedata` response carries, mapped to this server's slugs. */
 const LIVE_CATEGORY_KEYS: Record<ReferenceCategory, string> = {
@@ -64,21 +214,110 @@ const LIVE_CATEGORY_KEYS: Record<ReferenceCategory, string> = {
   countries: 'Countries',
 };
 
-/** Lowercase, strip diacritics and punctuation, collapse whitespace. */
-function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+/** Word-start index for one entry's title and formal name. */
+interface EntryWords {
+  /** Lowercase separator-free text from each word start to the end of its field. */
+  compactStarts: string[];
+  entry: ReferenceEntry;
+  /** Lowercase text from each word start (delimited or sub-word) to the end of its word. */
+  starts: string[];
+  /** Lowercase whitespace/punctuation-delimited words. */
+  words: Set<string>;
 }
 
-/** Per-category index: ordered entries, ID lookup, normalized-title list. */
+function indexWords(entry: ReferenceEntry): EntryWords {
+  const words = new Set<string>();
+  const starts: string[] = [];
+  const compactStarts: string[] = [];
+  for (const field of [entry.Title, entry.FormalName]) {
+    if (!field) continue;
+    const pairs = casedWords(field).map((word) => ({ word, lowerWord: lower(word) }));
+    const compact = pairs.map(({ lowerWord }) => lowerWord).join('');
+    let fieldOffset = 0;
+    for (const { word, lowerWord } of pairs) {
+      words.add(lowerWord);
+      for (const at of [0, ...subWordStarts(word)]) {
+        starts.push(lowerWord.slice(at));
+        compactStarts.push(compact.slice(fieldOffset + at));
+      }
+      fieldOffset += lowerWord.length;
+    }
+  }
+  return { entry, words, starts, compactStarts };
+}
+
+/** Per-category index: ordered entries, ID lookup, word starts, exact keys, aliases. */
 interface CategoryIndex {
+  /** Separator-free alias → entries in priority order. */
+  aliases: Map<string, ReferenceEntry[]>;
   byId: Map<number, ReferenceEntry>;
   entries: ReferenceEntry[];
+  /** Separator-free title, formal name, and ISO code → entries. */
+  exact: Map<string, ReferenceEntry[]>;
+  /** Word-start index per entry, ascending ID. */
+  words: EntryWords[];
+}
+
+/** Categories whose aliases name reference IDs directly. */
+const ID_ALIASES: Partial<Record<ReferenceCategory, Map<string, number[]>>> = {
+  connectiontypes: CONNECTOR_ALIASES,
+  levels: LEVEL_ALIASES,
+};
+
+/**
+ * A category's curated aliases resolved against the active data: IDs (or, for countries, ISO
+ * codes) the active data does not carry drop out.
+ */
+function aliasTargets(
+  category: ReferenceCategory,
+  entries: ReferenceEntry[],
+  byId: Map<number, ReferenceEntry>,
+): Map<string, ReferenceEntry[]> {
+  if (category === 'countries') {
+    const byIso = new Map(
+      entries.flatMap((entry) => (entry.ISOCode ? [[entry.ISOCode.toUpperCase(), entry]] : [])),
+    );
+    return new Map(
+      [...COUNTRY_ALIASES].map(([key, codes]) => [
+        key,
+        codes.flatMap((code) => byIso.get(code) ?? []),
+      ]),
+    );
+  }
+  return new Map(
+    [...(ID_ALIASES[category] ?? [])].map(([key, ids]) => [
+      key,
+      ids.flatMap((id) => byId.get(id) ?? []),
+    ]),
+  );
+}
+
+/**
+ * Rank every entry one query's words match (lower is better). Tiers: curated alias (in listed
+ * order), exact title / formal name / ISO code, every word a whole word of the entry, then any
+ * other match — every word a prefix of the entry's text at some word start, in any order, or the
+ * separator-free query a prefix of the separator-free text from a word start.
+ */
+function rankMatches(index: CategoryIndex, words: string[]): Map<ReferenceEntry, number> {
+  const ranks = new Map<ReferenceEntry, number>();
+  const key = words.join('');
+  index.aliases.get(key)?.forEach((entry, i) => void ranks.set(entry, i));
+  for (const entry of index.exact.get(key) ?? [])
+    if (!ranks.has(entry)) ranks.set(entry, RANK_EXACT);
+
+  // A repeated word adds no constraint. Checking each distinct word once keeps the per-entry
+  // work bounded by the entry's own words rather than by the length of the query.
+  const distinct = [...new Set(words)];
+  for (const { entry, words: entryWords, starts, compactStarts } of index.words) {
+    if (ranks.has(entry)) continue;
+    if (distinct.every((word) => entryWords.has(word))) ranks.set(entry, RANK_WHOLE_WORDS);
+    else if (
+      distinct.every((word) => starts.some((start) => start.startsWith(word))) ||
+      compactStarts.some((start) => start.startsWith(key))
+    )
+      ranks.set(entry, RANK_WORD_START);
+  }
+  return ranks;
 }
 
 export class ReferenceDataService {
@@ -148,51 +387,30 @@ export class ReferenceDataService {
   }
 
   /**
-   * Resolve a query to matching reference entries within a category, best/exact first.
-   * Strict normalized token match over the complete category set, plus curated connector aliases.
-   * Ranks every match, then returns the `[offset, offset + limit)` window alongside the full match
-   * count so the caller can disclose and page what the window left out. `total: 0` means no match
-   * (caller surfaces a browse hint).
+   * Resolve a query to matching reference entries within a category, best first. Each query word
+   * must start a word of the title or formal name — a delimited word or a CamelCase / letter–number
+   * sub-word — in any order, so "UK" never matches inside "Ukraine"; case, diacritics, and
+   * separators are ignored, and a leading "the" is optional. Ranks every match (see
+   * {@link rankMatches}), ties by ascending ID, then returns the `[offset, offset + limit)` window
+   * alongside the full match count so the caller can disclose and page what the window left out.
+   * `total: 0` means no match (caller surfaces a browse hint).
    */
   resolve(category: ReferenceCategory, query: string, limit: number, offset = 0): ReferencePage {
     const index = this.requireIndex(category);
-    const normalizedQuery = normalize(query);
-    if (normalizedQuery.length === 0) return { matches: [], total: 0 };
+    const words = queryWords(query);
+    if (words.length === 0) return { matches: [], total: 0 };
 
-    const ranked = new Map<number, number>(); // id → rank (lower is better)
-
-    // 1. Curated aliases (connection types only) take top priority.
-    if (category === 'connectiontypes') {
-      const aliasIds = CONNECTOR_ALIASES.get(normalizedQuery);
-      if (aliasIds) aliasIds.forEach((id, i) => void ranked.set(id, i));
-    }
-
-    // 2. Exact title / formal-name / ISO-code match.
-    const queryTokens = normalizedQuery.split(' ').filter(Boolean);
-    for (const entry of index.entries) {
-      if (ranked.has(entry.ID)) continue;
-      const title = normalize(entry.Title);
-      const formal = entry.FormalName ? normalize(entry.FormalName) : '';
-      const iso = entry.ISOCode ? entry.ISOCode.toLowerCase() : '';
-
-      if (title === normalizedQuery || formal === normalizedQuery || iso === normalizedQuery) {
-        ranked.set(entry.ID, 100);
+    const ranks = rankMatches(index, words);
+    if (words[0] === 'the' && words.length > 1) {
+      for (const [entry, rank] of rankMatches(index, words.slice(1))) {
+        const current = ranks.get(entry);
+        if (current === undefined || rank < current) ranks.set(entry, rank);
       }
     }
 
-    // 3. Token-subset match: every query token appears in title or formal name.
-    for (const entry of index.entries) {
-      if (ranked.has(entry.ID)) continue;
-      const hay = `${normalize(entry.Title)} ${entry.FormalName ? normalize(entry.FormalName) : ''}`;
-      if (queryTokens.every((t) => hay.includes(t))) {
-        ranked.set(entry.ID, 200);
-      }
-    }
-
-    const ordered = [...ranked.entries()]
-      .sort((a, b) => a[1] - b[1])
-      .map(([id]) => index.byId.get(id))
-      .filter((entry): entry is ReferenceEntry => entry !== undefined);
+    const ordered = [...ranks]
+      .sort(([a, rankA], [b, rankB]) => rankA - rankB || a.ID - b.ID)
+      .map(([entry]) => entry);
     return {
       matches: ordered.slice(offset, offset + limit).map((e) => this.toMatch(category, e)),
       total: ordered.length,
@@ -234,7 +452,24 @@ export class ReferenceDataService {
     for (const category of Object.keys(data) as ReferenceCategory[]) {
       const entries = [...data[category]].sort((a, b) => a.ID - b.ID);
       const byId = new Map(entries.map((e) => [e.ID, e]));
-      this.indices.set(category, { entries, byId });
+
+      const exact = new Map<string, ReferenceEntry[]>();
+      for (const entry of entries) {
+        const keys = new Set(
+          [entry.Title, entry.FormalName, entry.ISOCode]
+            .filter((field): field is string => !!field)
+            .map(compactKey),
+        );
+        for (const key of keys) exact.set(key, [...(exact.get(key) ?? []), entry]);
+      }
+
+      this.indices.set(category, {
+        entries,
+        byId,
+        words: entries.map(indexWords),
+        exact,
+        aliases: aliasTargets(category, entries, byId),
+      });
     }
   }
 

@@ -1,7 +1,8 @@
 /**
  * @fileoverview openchargemap_find_stations — find EV charging stations from the global Open
- * Charge Map registry near a point or within a bounding box, with connector/power/network/usage/
- * status filters. Coordinate-native; place names geocode via openstreetmap_search_places first.
+ * Charge Map registry near a point, within a bounding box, or along a route, with connector/power/
+ * network/usage/status filters. Coordinate-native; place names geocode via
+ * openstreetmap_search_places first.
  * @module mcp-server/tools/definitions/find-stations.tool
  */
 
@@ -12,10 +13,10 @@ import {
   getOpenChargeMapService,
   MAX_SEARCH_WINDOW,
 } from '@/services/openchargemap/openchargemap-service.js';
-import type { SearchPoiParams } from '@/services/openchargemap/types.js';
+import type { SearchArea, SearchLocation } from '@/services/openchargemap/types.js';
 import { getReferenceDataService } from '@/services/reference-data/reference-data-service.js';
 import { applyPageLimit, pageLimitSchema } from './_page-limit.js';
-import { renderStationBlock, StationSchema } from './_station-schema.js';
+import { renderStationPage, StationSchema } from './_station-schema.js';
 
 /**
  * Connector/operator/usage/level/status filter: an integer ID or an array (OR-matched), with the category's minimum.
@@ -56,7 +57,7 @@ const FindStationsInput = z.object({
     .max(500)
     .default(25)
     .describe(
-      'Search radius from the center point, in the unit given by distanceUnit (default km). Max 500. Keep small (5-25) for dense urban areas; widen for rural coverage.',
+      'Search radius from the center point — or, along a route, the corridor half-width: how far from the route a station may sit — in the unit given by distanceUnit (default km). Max 500. For a radius, keep small (5-25) in dense urban areas and widen for rural coverage; for a driving corridor, 2-10 km is typical.',
     ),
   distanceUnit: z
     .enum(['KM', 'Miles'])
@@ -71,7 +72,26 @@ const FindStationsInput = z.object({
     })
     .optional()
     .describe(
-      'Bounding-box search as an alternative to a center+radius. Mutually exclusive with latitude/longitude/distance — sending a boundingbox alongside a latitude or a longitude is rejected, not resolved in favour of one of them.',
+      'Bounding-box search as an alternative to a center+radius. The box is searched outward from its center, so its stations come back nearest the center first, each with its distance from the center in distanceUnit. The latitude corners may come in either order; a sw_lng greater than ne_lng spans the ±180° meridian (e.g. sw_lng 170, ne_lng -170 is the 20° around it, not the 340° between). Mutually exclusive with latitude/longitude/distance and route — sending a boundingbox alongside a latitude or a longitude is rejected, not resolved in favour of one of them.',
+    ),
+  route: z
+    .array(
+      z
+        .object({
+          latitude: z.number().min(-90).max(90).describe('Point latitude (WGS84 decimal degrees).'),
+          longitude: z
+            .number()
+            .min(-180)
+            .max(180)
+            .describe('Point longitude (WGS84 decimal degrees).'),
+        })
+        .describe('One route point.'),
+    )
+    .min(2)
+    .max(500)
+    .optional()
+    .describe(
+      "Search along a route instead of around a point or in a box: its points in travel order, 2 to 500 of them — waypoints, or a routing service's geometry. Each leg runs the shortest way between its two points, and distance becomes the corridor half-width. Stations within it come back in the order a driver meets them, each with routeDistance (along the route from its first point) and offRouteDistance (off the route), in distanceUnit. Mutually exclusive with latitude/longitude and boundingbox. Each leg must span less than 180° of longitude, so a route cannot cross ±180°.",
     ),
 
   countrycode: z
@@ -127,7 +147,7 @@ const FindStationsInput = z.object({
   maxresults: pageLimitSchema(200)
     .default(25)
     .describe(
-      'Maximum stations to return, ordered by distance from the search point. Max 200; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.',
+      'Maximum stations to return, nearest the search point first — the center of a radius search or of a bounding box — or in route order along a route. Max 200; larger values are clamped to 200.',
     ),
   offset: z
     .number()
@@ -136,14 +156,14 @@ const FindStationsInput = z.object({
     .max(MAX_SEARCH_WINDOW - 1)
     .default(0)
     .describe(
-      `Matching stations to skip before the returned page, for reading past a truncated result. Repeat the same search with the nextOffset value the previous call reported. One search reaches at most ${MAX_SEARCH_WINDOW} stations, so ${MAX_SEARCH_WINDOW - 1} is the deepest offset that can return one — narrow the area or add filters to reach stations beyond that. Ordering is by distance and stable, but Open Charge Map is edited continuously, so a station added or removed between pages can shift what a later offset lands on.`,
+      `Matching stations to skip before the returned page, for reading past a truncated result. Repeat the same search with the nextOffset value the previous call reported. One search reaches at most ${MAX_SEARCH_WINDOW} stations, so ${MAX_SEARCH_WINDOW - 1} is the deepest offset that can return one — narrow the area or add filters to reach stations beyond that. Ordering is by distance from the search point (a bounding box's center), or along a route by routeDistance then offRouteDistance, with station ID breaking ties, and stable, but Open Charge Map is edited continuously, so a station added or removed between pages can shift what a later offset lands on.`,
     ),
 });
 
 export const findStations = tool('openchargemap_find_stations', {
   title: 'openchargemap-mcp-server: find stations',
   description:
-    'Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_search_places first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its IDs with openchargemap_lookup_reference and pass every returned ID (e.g. "CCS" -> [32, 33]; Open Charge Map distinguishes CCS Type 1 (32, common in North America) and Type 2 (33, common in Europe); 33 alone can miss Type 1 stations). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
+    'Find EV charging stations from the global Open Charge Map registry near a point, within a bounding box, or along a route. Provide one location: a center (latitude + longitude + distance), a boundingbox, or a route (its points in travel order, with distance as the corridor half-width); optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names — resolve a place like "Ballard, Seattle" to coordinates with openstreetmap_search_places first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public, membership required, pay at location, private; price is not a usage type), charge level, operational status, and minimum charge points. Filter IDs are integers — resolve a connector or network name to its IDs with openchargemap_lookup_reference and pass every returned ID (e.g. "CCS" -> [32, 33]; Open Charge Map distinguishes CCS Type 1 (32, common in North America) and Type 2 (33, common in Europe); 33 alone can miss Type 1 stations). Each result includes title, address, distance from the search point (along a route: routeDistance along it and offRouteDistance off it), connections (type, power, count), operator, access rules, usage type ID, usage cost when on record, registry operational status, the last-verified date, and the data provider with its ID; the text output lists the license terms of each provider once per page, after the stations. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.',
   annotations: { readOnlyHint: true, openWorldHint: true },
 
   input: FindStationsInput,
@@ -151,7 +171,9 @@ export const findStations = tool('openchargemap_find_stations', {
   output: z.object({
     stations: z
       .array(StationSchema)
-      .describe('Matching stations, ordered by distance from the search point.'),
+      .describe(
+        'Matching stations, nearest the search point first — the center of a radius search or of a bounding box — or in route order along a route.',
+      ),
     searchSummary: z
       .string()
       .describe(
@@ -204,9 +226,9 @@ export const findStations = tool('openchargemap_find_stations', {
     {
       reason: 'invalid_location',
       code: JsonRpcErrorCode.InvalidParams,
-      when: 'No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude.',
+      when: 'No search area was provided; or only one half of a center arrived; or a boundingbox or a route arrived alongside another location or a stray latitude or longitude; or Open Charge Map cannot search the route — a leg spans 180° of longitude or more, the corridor reaches past a pole or ±180° longitude, or the request runs past the 8,177 bytes Open Charge Map accepts.',
       recovery:
-        'Provide either latitude + longitude (+ optional distance), or a boundingbox — exactly one, with no leftover coordinate beside the box. Geocode a place name with openstreetmap_search_places to obtain coordinates.',
+        'Provide exactly one location — latitude + longitude (+ optional distance), a boundingbox, or a route — with no leftover coordinate beside a box or a route. Geocode a place name with openstreetmap_search_places to obtain coordinates. A route the server cannot search names its own fix: add points to a long leg, narrow distance, or send fewer points.',
     },
     {
       reason: 'upstream_unavailable',
@@ -238,47 +260,63 @@ export const findStations = tool('openchargemap_find_stations', {
       notices.push(
         `Country code ${input.countrycode?.toUpperCase()} is not an Open Charge Map country code; the search ran without a country restriction. Resolve valid codes with openchargemap_lookup_reference (category countries).`,
       );
-    const hasLatitude = input.latitude !== undefined;
-    const hasLongitude = input.longitude !== undefined;
-    const hasRadius = hasLatitude && hasLongitude;
-    const hasBbox = input.boundingbox !== undefined;
-    // A boundingbox rules out EITHER coordinate, not just a complete center. Gating on the complete
-    // center let `{ latitude, boundingbox }` through as a bounding-box-only call, and the latitude
-    // was then dropped with nothing in the response saying so.
-    if (hasBbox ? hasLatitude || hasLongitude : !hasRadius) {
-      throw ctx.fail('invalid_location', locationFailure({ hasLatitude, hasLongitude, hasBbox }));
+    const { latitude, longitude, boundingbox, route } = input;
+    // A boundingbox or a route rules out either coordinate, not just a complete center, so a stray
+    // latitude is rejected rather than silently dropped.
+    const noCoordinate = latitude === undefined && longitude === undefined;
+    let location: SearchLocation;
+    if (route && !boundingbox && noCoordinate) {
+      location = {
+        mode: 'route',
+        route,
+        distance: input.distance,
+        distanceUnit: input.distanceUnit,
+      };
+    } else if (boundingbox && !route && noCoordinate) {
+      location = { mode: 'box', box: boundingbox, distanceUnit: input.distanceUnit };
+    } else if (!boundingbox && !route && latitude !== undefined && longitude !== undefined) {
+      location = {
+        mode: 'radius',
+        latitude,
+        longitude,
+        distance: input.distance,
+        distanceUnit: input.distanceUnit,
+      };
+    } else {
+      throw ctx.fail(
+        'invalid_location',
+        locationFailure({
+          hasLatitude: latitude !== undefined,
+          hasLongitude: longitude !== undefined,
+          hasBbox: boundingbox !== undefined,
+          hasRoute: route !== undefined,
+        }),
+      );
     }
 
-    const params: SearchPoiParams = {
-      window: input.offset + input.maxresults,
-      ...(input.boundingbox
-        ? { boundingbox: input.boundingbox }
-        : {
-            latitude: input.latitude,
-            longitude: input.longitude,
-            distance: input.distance,
-            distanceUnit: input.distanceUnit,
-          }),
-      ...(input.countrycode && !unknownCountry ? { countrycode: input.countrycode } : {}),
-      ...(input.connectiontypeid !== undefined ? { connectiontypeid: input.connectiontypeid } : {}),
-      ...(input.minpowerkw !== undefined ? { minpowerkw: input.minpowerkw } : {}),
-      ...(input.operatorid !== undefined ? { operatorid: input.operatorid } : {}),
-      ...(input.usagetypeid !== undefined ? { usagetypeid: input.usagetypeid } : {}),
-      ...(input.levelid !== undefined ? { levelid: input.levelid } : {}),
-      ...(input.statustypeid !== undefined ? { statustypeid: input.statustypeid } : {}),
-      ...(input.minchargepoints !== undefined ? { minchargepoints: input.minchargepoints } : {}),
-    };
-
-    const { fetched, matches, moreUpstream } = await getOpenChargeMapService().searchPois(
-      params,
-      ctx,
-    );
-    // Only an additional raw sentinel proves an upstream remainder. An exactly full pool without
-    // one is exhausted, including when local coordinate or charge-point filters remove every row.
+    const { area, fetched, matches, moreUpstream, reach } =
+      await getOpenChargeMapService().searchPois(
+        {
+          location,
+          ...(input.countrycode && !unknownCountry ? { countrycode: input.countrycode } : {}),
+          ...(input.connectiontypeid !== undefined
+            ? { connectiontypeid: input.connectiontypeid }
+            : {}),
+          ...(input.minpowerkw !== undefined ? { minpowerkw: input.minpowerkw } : {}),
+          ...(input.operatorid !== undefined ? { operatorid: input.operatorid } : {}),
+          ...(input.usagetypeid !== undefined ? { usagetypeid: input.usagetypeid } : {}),
+          ...(input.levelid !== undefined ? { levelid: input.levelid } : {}),
+          ...(input.statustypeid !== undefined ? { statustypeid: input.statustypeid } : {}),
+          ...(input.minchargepoints !== undefined
+            ? { minchargepoints: input.minchargepoints }
+            : {}),
+        },
+        ctx,
+      );
     ctx.log.info('OCM search complete', {
       fetched,
       matches: matches.length,
-      mode: hasBbox ? 'bbox' : 'radius',
+      mode: location.mode,
     });
 
     const stations = matches.slice(input.offset, input.offset + input.maxresults);
@@ -294,12 +332,15 @@ export const findStations = tool('openchargemap_find_stations', {
         guidance: [
           ...notices,
           truncationGuidance({
+            area,
             matched: matches.length,
             moreRetrieved,
             moreUpstream,
             offset: input.offset,
             pageSize: stations.length,
             maxresults: input.maxresults,
+            minchargepoints: input.minchargepoints !== undefined,
+            ...(reach === undefined ? {} : { reach }),
           }),
         ].join(' '),
       });
@@ -307,7 +348,7 @@ export const findStations = tool('openchargemap_find_stations', {
     } else {
       if (matches.length === 0)
         notices.push(
-          `No charging stations matched ${buildSearchSummary(input, hasBbox, unknownCountry)} Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.`,
+          `No charging stations matched ${buildSearchSummary(input, area, unknownCountry)} Widen the distance/bounding box, relax filters (drop minpowerkw, minchargepoints, or connectiontypeid), or remove countrycode. Verify the coordinates are on land in a covered region.`,
         );
       else if (stations.length === 0)
         notices.push(
@@ -318,7 +359,7 @@ export const findStations = tool('openchargemap_find_stations', {
 
     return {
       stations,
-      searchSummary: buildSearchSummary(input, hasBbox, unknownCountry),
+      searchSummary: buildSearchSummary(input, area, unknownCountry),
       attribution: ATTRIBUTION,
     };
   },
@@ -326,9 +367,7 @@ export const findStations = tool('openchargemap_find_stations', {
   format: (result) => {
     // "Showing", not "Found" — this is one page, and the match count rides the enrichment trailer.
     const lines = [`Showing ${result.stations.length} station(s). ${result.searchSummary}`, ''];
-    for (const s of result.stations) {
-      lines.push(renderStationBlock(s), '');
-    }
+    for (const block of renderStationPage(result.stations)) lines.push(block, '');
     lines.push(result.attribution);
     return [{ type: 'text', text: lines.join('\n') }];
   },
@@ -336,16 +375,29 @@ export const findStations = tool('openchargemap_find_stations', {
 
 /**
  * Name the specific location problem the caller hit. Every message states what actually arrived: a
- * bounding box present here means at least one coordinate came with it, and its absence means at
- * most one of latitude/longitude arrived. A confidently-worded wrong diagnosis costs the caller
- * more than a vague one, so the lone-coordinate cases name the coordinate they got rather than
- * borrowing the full-center wording.
+ * route present here means something else came with it, a bounding box (without a route) means at
+ * least one coordinate came with it, and the absence of both means at most one of latitude/longitude
+ * arrived. A confidently-worded wrong diagnosis costs the caller more than a vague one, so the
+ * lone-coordinate cases name the coordinate they got rather than borrowing the full-center wording.
  */
 function locationFailure(supplied: {
   hasLatitude: boolean;
   hasLongitude: boolean;
   hasBbox: boolean;
+  hasRoute: boolean;
 }): string {
+  if (supplied.hasRoute) {
+    const coordinate =
+      supplied.hasLatitude && supplied.hasLongitude
+        ? 'a center (latitude + longitude)'
+        : supplied.hasLatitude
+          ? 'a latitude'
+          : supplied.hasLongitude
+            ? 'a longitude'
+            : undefined;
+    const others = [coordinate, supplied.hasBbox ? 'a boundingbox' : undefined].filter(Boolean);
+    return `A route and ${others.join(' and ')} were supplied — provide exactly one location: a center (latitude + longitude), a boundingbox, or a route.`;
+  }
   if (supplied.hasBbox) {
     if (supplied.hasLatitude && supplied.hasLongitude) {
       return 'Both a center (latitude + longitude) and a boundingbox were supplied — provide exactly one, not both.';
@@ -359,7 +411,7 @@ function locationFailure(supplied: {
   if (supplied.hasLongitude) {
     return 'Latitude is missing — a center search needs latitude and longitude together.';
   }
-  return 'No search area was provided — supply either a center (latitude + longitude) or a boundingbox.';
+  return 'No search area was provided — supply a center (latitude + longitude), a boundingbox, or a route.';
 }
 
 /**
@@ -375,18 +427,21 @@ function locationFailure(supplied: {
  * it as the number of matching stations.
  */
 function truncationGuidance(page: {
+  area: SearchArea;
   matched: number;
   maxresults: number;
+  /** Whether the caller set minchargepoints, the one caller filter that runs on the retrieved pool. */
+  minchargepoints: boolean;
   moreRetrieved: boolean;
   moreUpstream: boolean;
   offset: number;
   pageSize: number;
+  reach?: number;
 }): string {
   const total = page.moreUpstream
     ? `${page.matched} stations retrieved`
     : `${page.matched} matching stations`;
-  const holdsMore =
-    'Open Charge Map holds more stations than this search retrieved — narrow the area or add filters to reach them.';
+  const holdsMore = remainderGuidance(page.area, page.reach);
   const deeper = page.moreUpstream ? ` ${holdsMore}` : '';
   /** Only a sentence that names the count may call it a floor; the zero-match branch names none. */
   const counted = page.moreUpstream ? ` That count is a floor: ${holdsMore}` : '';
@@ -394,7 +449,10 @@ function truncationGuidance(page: {
     return `Showing ${page.pageSize} of ${total}, from offset ${page.offset}. Pass offset ${page.offset + page.pageSize} on the same search for the next ${page.maxresults}.${counted}`;
   }
   if (page.matched === 0) {
-    return `No station this search retrieved met the filters. Relax minchargepoints or the other filters.${deeper}`;
+    // Every other filter ran upstream and chose which stations were retrieved, so relaxing one cannot
+    // surface a station this pool held; the remainder's own advice covers the area.
+    const relax = page.minchargepoints ? ' Relax minchargepoints.' : '';
+    return `No station this search retrieved ${withinArea(page.area)}met the filters.${relax}${deeper}`;
   }
   if (page.pageSize === 0) {
     return `This search retrieved ${page.matched} station(s), so offset ${page.offset} is past the last one. Lower offset to read them.${counted}`;
@@ -402,20 +460,82 @@ function truncationGuidance(page: {
   return `Showing ${page.pageSize} of ${total}, from offset ${page.offset} — every station this search retrieved.${counted}`;
 }
 
+/**
+ * The area test a retrieved station has to pass before the filters, as the zero-match notice names
+ * it: a box and a route corridor narrow the upstream search down, a radius is the search itself.
+ */
+function withinArea(area: SearchArea): string {
+  switch (area.mode) {
+    case 'radius':
+      return '';
+    case 'box':
+      return 'fell inside the box and ';
+    case 'route':
+      return `lay within ${area.distance} ${area.distanceUnit} of the route and `;
+    default: {
+      const unhandled: never = area;
+      throw new Error(`Unhandled search area: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
+
+/** A distance or coordinate as the notices print it: at most `places` decimals, trailing zeros dropped. */
+function rounded(value: number, places: number): number {
+  return Number(value.toFixed(places));
+}
+
+/**
+ * What to say when a 501st record proves Open Charge Map holds more than the pool: how far the pool
+ * reached in this location mode, when the pool carries distances, and how to reach the rest. The
+ * reach is floored so it never claims coverage past the farthest retrieved record.
+ */
+function remainderGuidance(area: SearchArea, reach: number | undefined): string {
+  const r = reach === undefined ? undefined : Math.floor(reach * 100) / 100;
+  switch (area.mode) {
+    case 'radius':
+      return `Open Charge Map holds more stations than this search retrieved.${r === undefined ? '' : ` The retrieved stations reach ${r} of the ${area.distance} ${area.distanceUnit} radius.`} To reach the rest, narrow the radius or add filters.`;
+    case 'box':
+      return `Open Charge Map holds more stations than this search retrieved.${r === undefined ? '' : ` The retrieved stations cover the box out to ${r} ${area.distanceUnit} from its center (${rounded(area.latitude, 6)}, ${rounded(area.longitude, 6)}); its farthest point is ${rounded(area.distance, 2)} ${area.distanceUnit} away.`} To reach the rest, split the box into smaller boxes or add filters.`;
+    // Route matches carry no distance and arrive by descending station ID, so the pool spans the
+    // whole route and says nothing about how far along it the search reached.
+    case 'route':
+      return 'Open Charge Map holds more stations than this search retrieved. Route matches arrive newest first (by descending station ID), so stations added earlier may be missing anywhere along the route. To reach the rest, search shorter stretches of the route, narrow distance, or add filters.';
+    default: {
+      const unhandled: never = area;
+      throw new Error(`Unhandled search area: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
+
 /** Compose a human-readable echo of the resolved search and active filters. */
 function buildSearchSummary(
   input: z.infer<typeof FindStationsInput>,
-  hasBbox: boolean,
+  area: SearchArea,
   unknownCountry = false,
 ): string {
   const bits: string[] = [];
-  if (hasBbox && input.boundingbox) {
-    const b = input.boundingbox;
-    bits.push(`Bounding box (${b.sw_lat},${b.sw_lng})-(${b.ne_lat},${b.ne_lng})`);
-  } else {
-    bits.push(
-      `Within ${input.distance} ${input.distanceUnit} of ${input.latitude},${input.longitude}`,
-    );
+  switch (area.mode) {
+    case 'radius':
+      bits.push(
+        `Within ${area.distance} ${area.distanceUnit} of ${area.latitude},${area.longitude}`,
+      );
+      break;
+    case 'box': {
+      const b = area.box;
+      bits.push(
+        `Bounding box (${b.sw_lat},${b.sw_lng})-(${b.ne_lat},${b.ne_lng})${area.crossesAntimeridian ? ' crossing the antimeridian (±180° longitude)' : ''}, distances in ${area.distanceUnit} from its center ${rounded(area.latitude, 6)},${rounded(area.longitude, 6)}`,
+      );
+      break;
+    }
+    case 'route':
+      bits.push(
+        `Within ${area.distance} ${area.distanceUnit} of a ${area.route.length}-point route (${rounded(area.length, 2)} ${area.distanceUnit} long)`,
+      );
+      break;
+    default: {
+      const unhandled: never = area;
+      throw new Error(`Unhandled search area: ${JSON.stringify(unhandled)}`);
+    }
   }
   if (input.countrycode)
     bits.push(

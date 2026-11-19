@@ -5,7 +5,7 @@
  * @module tests/tools/lookup-reference.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { lookupReference } from '@/mcp-server/tools/definitions/lookup-reference.tool.js';
 import { initReferenceDataService } from '@/services/reference-data/reference-data-service.js';
@@ -281,6 +281,48 @@ describe('openchargemap_lookup_reference', () => {
       c,
     );
     expect(getEnrichment(c).notice).toContain('zzzznotanetwork');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/36
+  it('puts a curated country alias ahead of a word-prefix match on both surfaces', async () => {
+    const result = await runToolContract(lookupReference, { category: 'countries', query: 'UK' });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      matches: [
+        { id: 1, title: 'United Kingdom', isoCode: 'GB' },
+        { id: 234, title: 'Ukraine', isoCode: 'UA' },
+      ],
+      totalCount: 2,
+    });
+    const text = JSON.stringify(result.content);
+    expect(text).toContain('- 1 — United Kingdom (ISO: GB');
+    expect(text.indexOf('United Kingdom')).toBeLessThan(text.indexOf('Ukraine'));
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/36
+  it('resolves a Cyrillic operator title on both surfaces', async () => {
+    const result = await runToolContract(lookupReference, { category: 'operators', query: 'МГТС' });
+    expect(result.structuredContent).toMatchObject({
+      matches: [{ id: 3487, title: 'МГТС' }],
+      totalCount: 1,
+    });
+    expect(JSON.stringify(result.content)).toContain('- 3487 — МГТС');
+  });
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/36
+  it('answers a query found only inside words with the empty-result guidance', async () => {
+    const result = await runToolContract(lookupReference, {
+      category: 'countries',
+      query: 'nited',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      matches: [],
+      totalCount: 0,
+      notice: expect.stringContaining('No countries entry matched query "nited"'),
+    });
+    expect(JSON.stringify(result.content)).toContain('No countries entry matched query');
+    expect(JSON.stringify(result.content)).toContain('browse');
   });
 
   // https://github.com/cyanheads/openchargemap-mcp-server/issues/10

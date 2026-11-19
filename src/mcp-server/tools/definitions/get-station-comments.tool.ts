@@ -25,7 +25,7 @@ export const getStationComments = tool('openchargemap_get_station_comments', {
     maxresults: pageLimitSchema(100)
       .default(25)
       .describe(
-        'Maximum comments to return, newest first. Max 100; larger positive integers are clamped unless OPENCHARGEMAP_CLAMP_LIMITS=false.',
+        'Maximum comments to return, newest first. Max 100; larger values are clamped to 100.',
       ),
     offset: z
       .number()

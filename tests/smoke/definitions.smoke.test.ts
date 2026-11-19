@@ -3,6 +3,7 @@
  * @module tests/smoke/definitions.smoke.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { describe, expect, it } from 'vitest';
 import { stationResource } from '@/mcp-server/resources/definitions/station.resource.js';
 import { findStations } from '@/mcp-server/tools/definitions/find-stations.tool.js';
@@ -76,6 +77,22 @@ describe('definition smoke checks', () => {
       const auth = definition.errors?.find((entry) => entry.reason === 'auth_failed');
       expect(auth?.when).toContain('401');
       expect(auth?.when).toContain('403');
+    },
+  );
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/40
+  // Callers cannot set server env vars, and Open Charge Map has no "free" usage type (cost is free
+  // text in usageCost), so neither belongs in what a caller reads.
+  it.each([findStations, getStation, getStationComments, lookupReference])(
+    'keeps operator settings and a nonexistent usage type out of $name caller text',
+    (definition) => {
+      const callerText = JSON.stringify([
+        definition.description,
+        z.toJSONSchema(definition.input),
+        definition.output ? z.toJSONSchema(definition.output) : null,
+      ]);
+      expect(callerText).not.toContain('OPENCHARGEMAP_CLAMP_LIMITS');
+      expect(callerText).not.toMatch(/usage type[^.]{0,40}\bfree\b/i);
     },
   );
 

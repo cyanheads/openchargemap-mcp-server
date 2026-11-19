@@ -60,6 +60,15 @@ export function isFaultComment(c: {
 }
 
 /**
+ * True for coordinates OCM records as a placeholder: at or a few metres off 0,0. The 1° square around
+ * 0,0 is open ocean (the nearest land, São Tomé, lies 6.5° east), so no station stands in it; a
+ * single-axis zero outside it (the equator through Kampala) is a real location.
+ */
+export function isPlaceholderCoordinate(latitude: number, longitude: number): boolean {
+  return Math.abs(latitude) < 1 && Math.abs(longitude) < 1;
+}
+
+/**
  * Compose a plain-prose reliability caveat from observable facts, or undefined when there is
  * nothing to flag (status fresh, operational, no fault reports).
  */
@@ -73,10 +82,12 @@ export function buildReliabilityNote(input: {
 }): string | undefined {
   const parts: string[] = [];
 
-  const badCoordinates = input.coordinates?.latitude === 0 && input.coordinates?.longitude === 0;
+  const badCoordinates =
+    input.coordinates !== undefined &&
+    isPlaceholderCoordinate(input.coordinates.latitude, input.coordinates.longitude);
   if (badCoordinates) {
     parts.push(
-      'Coordinates are recorded as 0,0 — a placeholder, not a real location; do not use them for distance or navigation.',
+      'Coordinates are recorded at or next to 0,0 — a placeholder, not a real location; do not use them for distance or navigation.',
     );
   }
 

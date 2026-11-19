@@ -18,7 +18,11 @@ vi.mock('@cyanheads/mcp-ts-core/utils', async (importActual) => {
     ...actual,
     createCounter: () => ({ add: clampCount }),
     fetchWithTimeout: (...args: unknown[]) => fetchWithTimeout(...args),
-    withRetry: (fn: () => unknown) => fn(),
+    withRetry: ((fn, options) =>
+      fn({
+        signal: options?.signal ?? new AbortController().signal,
+        remainingMs: Number.POSITIVE_INFINITY,
+      })) satisfies typeof actual.withRetry,
   };
 });
 
@@ -91,6 +95,23 @@ describe('tool integration at the OCM boundary', () => {
     expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/40
+  it('states the page cap in the switch-off rejection without naming the operator setting', async () => {
+    vi.stubEnv('OPENCHARGEMAP_CLAMP_LIMITS', 'false');
+    for (const [result, cap] of [
+      [
+        await runToolContract(findStations, { latitude: 47, longitude: -122, maxresults: 201 }),
+        200,
+      ],
+      [await runToolContract(getStationComments, { id: 145452, maxresults: 101 }), 100],
+      [await runToolContract(lookupReference, { category: 'countries', limit: 101 }), 100],
+    ] as const) {
+      const text = JSON.stringify([result.content, result.structuredContent]);
+      expect(text).toContain(`Must be at most ${cap}.`);
+      expect(text).not.toContain('OPENCHARGEMAP_CLAMP_LIMITS');
+    }
+  });
+
   it('logs and counts each clamp once with bounded labels', async () => {
     const context = createMockContext({ errors: findStations.errors });
     const log = vi.spyOn(context.log, 'notice');
@@ -157,16 +178,23 @@ describe('tool integration at the OCM boundary', () => {
       expect(result.structuredContent).toMatchObject({ stations: [], totalCount: 0 });
       const text = JSON.stringify(result.content);
       for (const token of ['ZZ', '201', '200']) expect(text).toContain(token);
+      // https://github.com/cyanheads/openchargemap-mcp-server/issues/35
+      // Every pool row sits 0.1445 km out, so a pool cut short by the sentinel reached 0.14 km.
+      const reach = 'The retrieved stations reach 0.14 of the 25 KM radius.';
       if (size === 501) {
         expect(result.structuredContent).toMatchObject({
           truncated: true,
           notice: expect.stringContaining('No station this search retrieved met the filters'),
         });
         expect(text).toContain('holds more stations');
+        expect(result.structuredContent).toHaveProperty('notice', expect.stringContaining(reach));
+        expect(text).toContain(reach);
       } else {
         expect(result.structuredContent).not.toHaveProperty('truncated');
         expect(text).toContain('No charging stations matched');
         expect(text).not.toContain('holds more stations');
+        expect(text).not.toContain('The retrieved stations');
+        expect(JSON.stringify(result.structuredContent)).not.toContain('The retrieved stations');
       }
     },
   );
@@ -293,6 +321,22 @@ describe('tool integration at the OCM boundary', () => {
       expect(JSON.stringify(result.content)).toContain('browse');
     },
   );
+
+  // https://github.com/cyanheads/openchargemap-mcp-server/issues/36
+  it('handles prototype queries as ordinary empty successes in every category', async () => {
+    for (const category of lookupReference.input.shape.category.options) {
+      for (const query of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+        const result = await runToolContract(lookupReference, { category, query });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          matches: [],
+          totalCount: 0,
+          notice: expect.stringContaining(query),
+        });
+        expect(JSON.stringify(result.content)).toContain(query);
+      }
+    }
+  });
 
   it('clamps comment and reference pages while preserving their ordinary outputs', async () => {
     const comments = await runToolContract(getStationComments, { id: 145452, maxresults: 101 });
